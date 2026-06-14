@@ -64,11 +64,14 @@ func main() {
 
 func printBanner(cfg *config.Config) {
 	fmt.Println()
-	fmt.Println("  __________  ___    ____________")
-	fmt.Println("  / ____/ __ \\/   |  / ____/_  __/")
-	fmt.Println("  / / __/ /_/ / /| | / /_    / /   ")
-	fmt.Println("  / /_/ / _, _/ ___ |/ __/   / /    ")
-	fmt.Println("  \\____/_/ |_/_/  |_/_/     /_/  ")
+	fmt.Println("  ▄   ▄▄▄▄   ▄▄▄▄▄▄        ▄▄      ▄▄▄▄▄▄▄   ▄▄▄▄▄▄▄  ")
+	fmt.Println("   ▀██████▀  █▀██▀▀▀█▄    ▄█▀▀█▄   █▀██▀▀▀   █▀▀██▀▀▀▀ ")
+	fmt.Println("     ██   ▄    ██▄▄▄█▀    ██  ██     ██         ██     ")
+	fmt.Println("     ██  ██    ██▀▀█▄     ██▀▀██     ███▀       ██     ")
+	fmt.Println("     ██  ██  ▄ ██  ██   ▄ ██  ██   ▄ ██         ██     ")
+	fmt.Println("     ▀█████  ▀██▀  ▀██▀ ▀██▀  ▀█▄█ ▀██▀         ▀██▄   ")
+	fmt.Println("     ▄   ██                                            ")
+	fmt.Println("     ▀████▀ ")
 	fmt.Printf("  github.com/redstone-md/graft  %s\n", version)
 	fmt.Println()
 
