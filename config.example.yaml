@@ -18,27 +18,35 @@ providers:
   #   api_key: "sk-xxxxxxxxxxxx"
 
 # Concrete models — each refs a provider and a model ID.
+# context_window: max tokens (input + output). Determines pipeline limit.
+# The effective context = min(context_window) of all models in the pipeline.
 models:
   deepseek-v4:
     provider: openrouter
     model: "deepseek/deepseek-v4-pro"
+    context_window: 131072
   gemini-flash:
     provider: openrouter
     model: "google/gemini-2.5-flash"
+    context_window: 1048576
   kimi:
     provider: openrouter
     model: "moonshotai/kimi-k2.6"
+    context_window: 131072
   claude-opus:
     provider: openrouter
     model: "anthropic/claude-opus-4"
+    context_window: 200000
   claude-haiku:
     provider: openrouter
     model: "anthropic/claude-haiku-4.5"
+    context_window: 200000
 
 # Pipeline profiles — each defines: panel → judge → final.
 # Use the profile name as the "model" field in /v1/chat/completions.
 profiles:
   # Default: balanced cost/quality.
+  # Effective context: min(131072, 1048576, 131072, 200000) = 131072
   default:
     panel:
       - deepseek-v4
@@ -48,6 +56,7 @@ profiles:
     final: claude-opus
 
   # Cheap: budget models only.
+  # Effective context: min(1048576, 131072, 131072) = 131072
   cheap:
     panel:
       - gemini-flash
@@ -56,6 +65,7 @@ profiles:
     final: deepseek-v4
 
   # Premium: maximum quality.
+  # Effective context: min(200000, 131072, 1048576, 200000) = 131072
   premium:
     panel:
       - claude-opus
@@ -65,6 +75,7 @@ profiles:
     final: claude-opus
 
   # Fast: minimal panel, fast models.
+  # Effective context: min(1048576, 200000, 131072) = 131072
   fast:
     panel:
       - gemini-flash
