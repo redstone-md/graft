@@ -23,6 +23,9 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Test
+        run: go test ./... -count=1
+
       - name: Build
         run: go build -o graft ./cmd/graft/
 
@@ -47,8 +50,56 @@ jobs:
           GOOS=darwin  GOARCH=arm64 go build -o dist/graft-darwin-arm64      ./cmd/graft/
           GOOS=windows GOARCH=amd64 go build -o dist/graft-windows-amd64.exe ./cmd/graft/
 
+      - name: Generate release notes
+        run: |
+          # Find previous tag
+          PREV_TAG=$(git tag --sort=-v:refname | head -2 | tail -1)
+          CURR_TAG=${GITHUB_REF#refs/tags/}
+
+          echo "# ${CURR_TAG}" > RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+
+          # Commit summary
+          echo "## Commits" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" != "$CURR_TAG" ]; then
+            git log "${PREV_TAG}..${CURR_TAG}" --pretty=format:"- %s (%h)" --no-merges >> RELEASE_NOTES.md
+          else
+            git log --pretty=format:"- %s (%h)" --no-merges -20 >> RELEASE_NOTES.md
+          fi
+          echo "" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+
+          # Stats
+          echo "## Stats" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" != "$CURR_TAG" ]; then
+            COMMITS=$(git log "${PREV_TAG}..${CURR_TAG}" --oneline --no-merges | wc -l)
+            FILES=$(git diff --stat "${PREV_TAG}..${CURR_TAG}" | tail -1)
+          else
+            COMMITS=$(git log --oneline --no-merges -20 | wc -l)
+            FILES=$(git diff --stat HEAD~"${COMMITS}" HEAD 2>/dev/null || echo "N/A")
+          fi
+          echo "- **Commits:** ${COMMITS}" >> RELEASE_NOTES.md
+          echo "- **Changes:** ${FILES}" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+
+          # Download links
+          echo "## Download" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          echo "| Platform | Binary |" >> RELEASE_NOTES.md
+          echo "|----------|--------|" >> RELEASE_NOTES.md
+          echo "| Linux (x64) | \`graft-linux-amd64\` |" >> RELEASE_NOTES.md
+          echo "| Linux (ARM) | \`graft-linux-arm64\` |" >> RELEASE_NOTES.md
+          echo "| macOS (Intel) | \`graft-darwin-amd64\` |" >> RELEASE_NOTES.md
+          echo "| macOS (Apple Silicon) | \`graft-darwin-arm64\` |" >> RELEASE_NOTES.md
+          echo "| Windows (x64) | \`graft-windows-amd64.exe\` |" >> RELEASE_NOTES.md
+
+          cat RELEASE_NOTES.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          body_path: RELEASE_NOTES.md
           generate_release_notes: true
