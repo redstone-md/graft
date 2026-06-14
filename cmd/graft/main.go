@@ -63,69 +63,38 @@ func main() {
 }
 
 func printBanner(cfg *config.Config) {
-	const w = 64 // inner width between │ symbols
-
-	port := cfg.Server.Port
-
 	fmt.Println()
-	printLine("╔", "═", "╗", w)
-	printLinePadded("║", fmt.Sprintf("  GRAFT %s", version), "║", w)
-	printLine("╠", "═", "╣", w)
-	printLinePadded("║", fmt.Sprintf("  http://localhost:%s", port), "║", w)
-	printLine("╠", "═", "╣", w)
+	fmt.Println("  ██████╗  █████╗ ██████╗ ██████╗ ███████╗")
+	fmt.Println("  ██╔══██╗██╔══██╗██╔══██╗██╔══██╗██╔════╝")
+	fmt.Println("  ██████╔╝███████║██║  ██║██║  ██║███████╗")
+	fmt.Println("  ██╔══██╗██╔══██║██║  ██║██║  ██║╚════██║")
+	fmt.Println("  ██║  ██║██║  ██║██████╔╝██████╔╝███████║")
+	fmt.Println("  ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚═════╝ ╚══════╝")
+	fmt.Printf("  github.com/redstone-md/graft  %s\n", version)
+	fmt.Println()
 
 	// Models
-	printLinePadded("║", "  Models:", "║", w)
+	fmt.Println("  Models:")
 	for name, m := range cfg.Models {
-		line := fmt.Sprintf("    %-10s %s/%s", name, m.Provider, m.Model)
+		ctx := ""
 		if m.ContextWindow > 0 {
-			line += fmt.Sprintf("  [%s]", formatTokens(m.ContextWindow))
+			ctx = fmt.Sprintf("  [%s]", formatTokens(m.ContextWindow))
 		}
-		printLinePadded("║", line, "║", w)
+		fmt.Printf("    %-12s %s/%s%s\n", name, m.Provider, m.Model, ctx)
 	}
-
-	printLine("╠", "═", "╣", w)
+	fmt.Println()
 
 	// Profiles
-	printLinePadded("║", "  Profiles:", "║", w)
+	fmt.Println("  Profiles:")
 	for name, fp := range cfg.Profiles {
 		panel := strings.Join(fp.Panel, " + ")
-		line := fmt.Sprintf("    %-8s %s → %s → %s", name, panel, fp.Judge, fp.Final)
-		printLinePadded("║", line, "║", w)
+		fmt.Printf("    %-10s %s → %s → %s\n", name, panel, fp.Judge, fp.Final)
 	}
-
-	printLine("╠", "═", "╣", w)
-	printLinePadded("║", "  Routes:", "║", w)
-	printLinePadded("║", "    POST /v1/chat/completions", "║", w)
-	printLinePadded("║", "    GET  /v1/models", "║", w)
-	printLinePadded("║", "    GET  /health", "║", w)
-	printLine("╚", "═", "╝", w)
 	fmt.Println()
-}
 
-// printLine draws a box line: left + repeated char + right, total inner width w.
-func printLine(left, ch, right string, w int) {
-	fmt.Print(left)
-	for i := 0; i < w; i++ {
-		fmt.Print(ch)
-	}
-	fmt.Println(right)
-}
-
-// printLinePadded draws: │  content padded to w-4  │
-func printLinePadded(border, content, end string, w int) {
-	inner := w - 4 // 2 spaces padding on each side
-	if inner < 0 {
-		inner = 0
-	}
-	padded := content
-	if len(padded) > inner {
-		padded = padded[:inner-1] + "…"
-	}
-	for len(padded) < inner {
-		padded += " "
-	}
-	fmt.Printf("%s  %s  %s\n", border, padded, end)
+	// Routes
+	fmt.Println("  Listening on http://localhost:" + cfg.Server.Port)
+	fmt.Println()
 }
 
 func formatTokens(n int) string {
