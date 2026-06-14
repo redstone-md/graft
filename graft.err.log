@@ -1,4 +1,0 @@
-2026/06/14 12:06:14 Graft starting on :8080
-2026/06/14 12:06:14   profile "default": panel=[deepseek qwen kimi] judge=deepseek final=deepseek
-2026/06/14 12:06:14   profile "cheap": panel=[deepseek qwen] judge=deepseek final=deepseek
-2026/06/14 12:06:14   profile "fast": panel=[kimi deepseek] judge=deepseek final=deepseek
