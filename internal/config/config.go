@@ -28,8 +28,9 @@ type Provider struct {
 }
 
 type ModelRef struct {
-	Provider string `yaml:"provider"`
-	Model    string `yaml:"model"`
+	Provider      string `yaml:"provider"`
+	Model         string `yaml:"model"`
+	ContextWindow int    `yaml:"context_window"` // max tokens (input + output). 0 = unknown.
 }
 
 type PipelineProfile struct {
@@ -148,6 +149,34 @@ func (c *Config) ResolveModel(ref string) (baseURL, apiKey, modelID string, err 
 		return "", "", "", fmt.Errorf("unknown provider: %q", m.Provider)
 	}
 	return p.BaseURL, p.APIKey, m.Model, nil
+}
+
+// ResolveModelFull returns all fields for a model ref.
+func (c *Config) ResolveModelFull(ref string) (ModelRef, error) {
+	m, ok := c.Models[ref]
+	if !ok {
+		return ModelRef{}, fmt.Errorf("unknown model: %q", ref)
+	}
+	return m, nil
+}
+
+// MinContextWindow returns the smallest context_window among the given model refs.
+// Returns 0 if any model has context_window=0 (unknown).
+func (c *Config) MinContextWindow(refs []string) int {
+	min := 0
+	for _, ref := range refs {
+		m, ok := c.Models[ref]
+		if !ok {
+			continue
+		}
+		if m.ContextWindow == 0 {
+			return 0 // unknown — can't constrain
+		}
+		if min == 0 || m.ContextWindow < min {
+			min = m.ContextWindow
+		}
+	}
+	return min
 }
 
 func providerKeys(c *Config) []string {
