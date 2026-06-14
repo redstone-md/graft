@@ -54,9 +54,12 @@ jobs:
 
       - name: Generate release notes
         run: |
+          CURR_TAG=${GITHUB_REF#refs/tags/}
+          REPO="${GITHUB_REPOSITORY}"
+          DOWNLOAD_BASE="https://github.com/${REPO}/releases/download/${CURR_TAG}"
+
           # Find previous tag
           PREV_TAG=$(git tag --sort=-v:refname | head -2 | tail -1)
-          CURR_TAG=${GITHUB_REF#refs/tags/}
 
           echo "# ${CURR_TAG}" > RELEASE_NOTES.md
           echo "" >> RELEASE_NOTES.md
@@ -72,30 +75,16 @@ jobs:
           echo "" >> RELEASE_NOTES.md
           echo "" >> RELEASE_NOTES.md
 
-          # Stats
-          echo "## Stats" >> RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
-          if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" != "$CURR_TAG" ]; then
-            COMMITS=$(git log "${PREV_TAG}..${CURR_TAG}" --oneline --no-merges | wc -l)
-            FILES=$(git diff --stat "${PREV_TAG}..${CURR_TAG}" | tail -1)
-          else
-            COMMITS=$(git log --oneline --no-merges -20 | wc -l)
-            FILES=$(git diff --stat HEAD~"${COMMITS}" HEAD 2>/dev/null || echo "N/A")
-          fi
-          echo "- **Commits:** ${COMMITS}" >> RELEASE_NOTES.md
-          echo "- **Changes:** ${FILES}" >> RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
-
           # Download links
           echo "## Download" >> RELEASE_NOTES.md
           echo "" >> RELEASE_NOTES.md
           echo "| Platform | Binary |" >> RELEASE_NOTES.md
           echo "|----------|--------|" >> RELEASE_NOTES.md
-          echo "| Linux (x64) | \`graft-linux-amd64\` |" >> RELEASE_NOTES.md
-          echo "| Linux (ARM) | \`graft-linux-arm64\` |" >> RELEASE_NOTES.md
-          echo "| macOS (Intel) | \`graft-darwin-amd64\` |" >> RELEASE_NOTES.md
-          echo "| macOS (Apple Silicon) | \`graft-darwin-arm64\` |" >> RELEASE_NOTES.md
-          echo "| Windows (x64) | \`graft-windows-amd64.exe\` |" >> RELEASE_NOTES.md
+          echo "| Linux (x64) | [graft-linux-amd64](${DOWNLOAD_BASE}/graft-linux-amd64) |" >> RELEASE_NOTES.md
+          echo "| Linux (ARM) | [graft-linux-arm64](${DOWNLOAD_BASE}/graft-linux-arm64) |" >> RELEASE_NOTES.md
+          echo "| macOS (Intel) | [graft-darwin-amd64](${DOWNLOAD_BASE}/graft-darwin-amd64) |" >> RELEASE_NOTES.md
+          echo "| macOS (Apple Silicon) | [graft-darwin-arm64](${DOWNLOAD_BASE}/graft-darwin-arm64) |" >> RELEASE_NOTES.md
+          echo "| Windows (x64) | [graft-windows-amd64.exe](${DOWNLOAD_BASE}/graft-windows-amd64.exe) |" >> RELEASE_NOTES.md
 
           cat RELEASE_NOTES.md
 

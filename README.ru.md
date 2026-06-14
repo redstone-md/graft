@@ -6,6 +6,7 @@
 <p align="center">
   <a href="README.md"><img src="https://img.shields.io/badge/🇬🇧-English-blue" alt="English"></a>
   <a href="README.ru.md"><img src="https://img.shields.io/badge/🇷🇺-Русский-blue" alt="Русский"></a>
+  <a href="README.zh.md"><img src="https://img.shields.io/badge/🇨🇳-简体中文-blue" alt="简体中文"></a>
 </p>
 
 <p align="center">
@@ -95,7 +96,7 @@ cp config.example.yaml config.yaml
 ./graft -config config.yaml
 ```
 
-Подробная инструкция по настройке: **[docs/SETUP.md](docs/SETUP.md)**
+Подробная инструкция по настройке: **[docs/SETUP.ru.md](docs/SETUP.ru.md)**
 
 ## Использование
 
@@ -206,7 +207,7 @@ profiles:
     final: claude-opus
 ```
 
-Полное описание конфигурации: **[docs/SETUP.md](docs/SETUP.md)**
+Полное описание конфигурации: **[docs/SETUP.ru.md](docs/SETUP.ru.md)**
 
 ## Идеи проекта
 
@@ -229,7 +230,7 @@ effective_context = min(context_window) всех моделей в pipeline
 
 Если у вас deepseek-v4 (128K) и gemini-flash (1M), контекст будет **128K** — потому что deepseek не влезет больше. Старые сообщения обрезаются автоматически.
 
-Подробнее: **[docs/SETUP.md](docs/SETUP.md#настройка-моделей)**
+Подробнее: **[docs/SETUP.ru.md](docs/SETUP.ru.md#настройка-моделей)**
 
 ## CI/CD
 

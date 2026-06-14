@@ -4,8 +4,9 @@
 </p>
 
 <p align="center">
-  <a href="README.ru.md"><img src="https://img.shields.io/badge/🇷🇺-Русский-blue" alt="Русский"></a>
   <a href="README.md"><img src="https://img.shields.io/badge/🇬🇧-English-blue" alt="English"></a>
+  <a href="README.ru.md"><img src="https://img.shields.io/badge/🇷🇺-Русский-blue" alt="Русский"></a>
+  <a href="README.zh.md"><img src="https://img.shields.io/badge/🇨🇳-简体中文-blue" alt="简体中文"></a>
 </p>
 
 <p align="center">
@@ -95,7 +96,7 @@ cp config.example.yaml config.yaml
 ./graft -config config.yaml
 ```
 
-Detailed setup guide: **[docs/SETUP.md](docs/SETUP.md)**
+Detailed setup guide: **[docs/SETUP.en.md](docs/SETUP.en.md)**
 
 ## Usage
 
@@ -206,7 +207,7 @@ profiles:
     final: claude-opus
 ```
 
-Full configuration guide: **[docs/SETUP.md](docs/SETUP.md)**
+Full configuration guide: **[docs/SETUP.en.md](docs/SETUP.en.md)**
 
 ## Project Ideas
 
@@ -229,7 +230,7 @@ effective_context = min(context_window) of all models in pipeline
 
 If you have deepseek-v4 (128K) and gemini-flash (1M), context will be **128K** — because deepseek can't handle more. Old messages are trimmed automatically.
 
-More details: **[docs/SETUP.md](docs/SETUP.md#model-setup)**
+More details: **[docs/SETUP.en.md](docs/SETUP.en.md#model-setup)**
 
 ## CI/CD
 
