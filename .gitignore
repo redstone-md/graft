@@ -10,7 +10,7 @@
 
 # Output
 *.out
-fusion
+/fusion
 
 # Config (has secrets)
 config.yaml
