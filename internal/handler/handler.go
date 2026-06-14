@@ -16,6 +16,63 @@ import (
 	"github.com/redstone-md/graft/internal/llm"
 )
 
+// ---------- Pipeline log formatting ----------
+
+// formatPipelineLog renders a human-readable pipeline log line.
+//
+// Example output:
+//
+//	[12:22:05] POST /v1/chat/completions 200 15.0s │ fast │ ctx: 65536
+//	  PANEL  kimi      5.4s  ttft 5.4s    4 tok   0.7 t/s
+//	  PANEL  deepseek  9.8s  ttft 9.7s    3 tok   0.3 t/s
+//	  JUDGE  deepseek  5.3s  ttft 0.0s    —
+//	  FINAL  deepseek  2.6s  ttft 0.0s    —
+func formatPipelineLog(p engine.PipelineLog) string {
+	ts := p.Timestamp
+	if t, err := time.Parse(time.RFC3339, p.Timestamp); err == nil {
+		ts = t.Local().Format("15:04:05")
+	}
+
+	var b strings.Builder
+
+	// Header line: [time] METHOD /path STATUS DURATION │ profile │ ctx: N
+	dur := formatDuration(p.DurationMs)
+	fmt.Fprintf(&b, "[%s] %s %s %d %s │ %s │ ctx: %d",
+		ts, p.Method, p.Path, p.StatusCode, dur, p.Profile, p.ContextLimit)
+	if p.Error != "" {
+		fmt.Fprintf(&b, " │ ERR: %s", p.Error)
+	}
+	b.WriteString("\n")
+
+	// Model lines.
+	for _, m := range p.Models {
+		status := "ok"
+		if m.Error != "" {
+			status = "ERR"
+		}
+
+		dur := formatDuration(m.DurationMs)
+		ttft := formatDuration(m.TTFTMs)
+
+		if m.TokenCount > 0 {
+			fmt.Fprintf(&b, "  %-6s %-10s %6s  ttft %5s  %3d tok  %5.1f t/s  %s\n",
+				m.Stage, m.Model, dur, ttft, m.TokenCount, m.TokensPerSec, status)
+		} else {
+			fmt.Fprintf(&b, "  %-6s %-10s %6s  ttft %5s  %3s      %5s  %s\n",
+				m.Stage, m.Model, dur, ttft, "—", "—", status)
+		}
+	}
+
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func formatDuration(ms int64) string {
+	if ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	return fmt.Sprintf("%.1fs", float64(ms)/1000)
+}
+
 // ---------- OpenAI-compatible types ----------
 
 type ChatCompletionRequest struct {
@@ -197,7 +254,7 @@ func (h *Handler) handleGraft(c *gin.Context, req ChatCompletionRequest) {
 	resp.Usage.CompletionTokens = estimateTokens(result.FinalAnswer)
 	resp.Usage.TotalTokens = resp.Usage.PromptTokens + resp.Usage.CompletionTokens
 
-	// Structured pipeline log.
+	// Pipeline log.
 	pLog := engine.PipelineLog{
 		Timestamp:    time.Now().UTC().Format(time.RFC3339),
 		Method:       c.Request.Method,
@@ -211,8 +268,7 @@ func (h *Handler) handleGraft(c *gin.Context, req ChatCompletionRequest) {
 	if pLog.Models == nil {
 		pLog.Models = []engine.ModelMetrics{}
 	}
-	logJSON, _ := json.MarshalIndent(pLog, "", "  ")
-	log.Println(string(logJSON))
+	log.Println(formatPipelineLog(pLog))
 
 	c.JSON(http.StatusOK, resp)
 }
@@ -245,7 +301,7 @@ func (h *Handler) handleGraftStream(c *gin.Context, req ChatCompletionRequest) {
 		Stream:      true,
 	}, c.Writer, flusher)
 
-	// Structured pipeline log.
+	// Pipeline log.
 	metrics := result.Metrics
 	if metrics == nil {
 		metrics = []engine.ModelMetrics{}
@@ -260,8 +316,7 @@ func (h *Handler) handleGraftStream(c *gin.Context, req ChatCompletionRequest) {
 		ContextLimit: result.ContextWindow,
 		Models:       metrics,
 	}
-	logJSON, _ := json.MarshalIndent(pLog, "", "  ")
-	log.Println(string(logJSON))
+	log.Println(formatPipelineLog(pLog))
 }
 
 // ---------- Proxy (non-graft) ----------

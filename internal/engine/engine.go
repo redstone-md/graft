@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -227,7 +228,7 @@ func (e *Engine) RunStream(ctx context.Context, req GraftRequest, w io.Writer, f
 	}()
 
 	// --- Stage 1: Panel ---
-	panelResults, panelMetrics := e.runPanelStream(ctx, panelConversation, panelModels, w, flusher)
+	panelResults, panelMetrics := e.runPanelStream(ctx, panelConversation, panelModels)
 
 	var answers []string
 	for _, r := range panelResults {
@@ -242,7 +243,7 @@ func (e *Engine) RunStream(ctx context.Context, req GraftRequest, w io.Writer, f
 	}
 
 	// --- Stage 2: Judge ---
-	judgeAnalysis, judgeRaw, judgeMetrics, err := e.runJudgeStream(ctx, judgeConversation, answers, judgeModel, w, flusher)
+	judgeAnalysis, judgeRaw, judgeMetrics, err := e.runJudgeStream(ctx, judgeConversation, answers, judgeModel)
 	allMetrics := append(panelMetrics, judgeMetrics)
 	if err != nil {
 		// Judge failed — fall back to best panel answer.
@@ -345,7 +346,7 @@ func (e *Engine) runPanel(ctx context.Context, messages []llm.Message, models []
 	return results
 }
 
-func (e *Engine) runPanelStream(ctx context.Context, messages []llm.Message, models []string, w io.Writer, f http.Flusher) ([]PanelResult, []ModelMetrics) {
+func (e *Engine) runPanelStream(ctx context.Context, messages []llm.Message, models []string) ([]PanelResult, []ModelMetrics) {
 	results := make([]PanelResult, len(models))
 	metrics := make([]ModelMetrics, len(models))
 	var wg sync.WaitGroup
@@ -361,8 +362,9 @@ func (e *Engine) runPanelStream(ctx context.Context, messages []llm.Message, mod
 
 			sm := &llm.StreamMetrics{}
 			start := time.Now()
+			// Panel results are NOT streamed to the client — use io.Discard.
 			full, err := e.client.StreamComplete(ctx, baseURL, apiKey, modelID, panelMsgs,
-				&streamAdapter{w: w, f: f, model: ref, mu: &mu}, sm)
+				io.Discard, sm)
 
 			m := ModelMetrics{
 				Model:        ref,
@@ -477,14 +479,14 @@ func (e *Engine) runJudge(ctx context.Context, conversation []llm.Message, answe
 	return parseJudgeAnalysis(raw)
 }
 
-func (e *Engine) runJudgeStream(ctx context.Context, conversation []llm.Message, answers []string, ref string, w io.Writer, f http.Flusher) (*JudgeAnalysis, string, ModelMetrics, error) {
+func (e *Engine) runJudgeStream(ctx context.Context, conversation []llm.Message, answers []string, ref string) (*JudgeAnalysis, string, ModelMetrics, error) {
 	baseURL, apiKey, modelID, _ := e.cfg.ResolveModel(ref)
 	messages := buildJudgeMessages(conversation, answers)
 
 	sm := &llm.StreamMetrics{}
-	var mu sync.Mutex
+	// Judge results are NOT streamed to the client — use io.Discard.
 	raw, err := e.client.StreamComplete(ctx, baseURL, apiKey, modelID, messages,
-		&streamAdapter{w: w, f: f, model: ref, mu: &mu}, sm)
+		io.Discard, sm)
 
 	m := ModelMetrics{
 		Model:        ref,
@@ -708,7 +710,7 @@ func (s *streamAdapter) Write(p []byte) (int, error) {
 	defer s.mu.Unlock()
 
 	var event llm.StreamEvent
-	if err := json.Unmarshal(p, &event); err != nil || len(event.Choices) == 0 {
+	if err := json.Unmarshal(bytes.TrimRight(p, "\n"), &event); err != nil || len(event.Choices) == 0 {
 		return len(p), nil
 	}
 

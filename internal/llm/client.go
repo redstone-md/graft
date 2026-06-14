@@ -203,8 +203,9 @@ func (c *Client) StreamComplete(
 			if metrics != nil {
 				metrics.TokenCount++
 			}
-			// Write raw SSE chunk to the adapter (preserves upstream format).
-			fmt.Fprintf(w, "data: %s\n\n", data)
+			// Write raw JSON to the adapter (NO "data: " wrapper —
+			// the adapter re-wraps it in OpenAI SSE format).
+			fmt.Fprintf(w, "%s\n", data)
 		}
 	}
 
