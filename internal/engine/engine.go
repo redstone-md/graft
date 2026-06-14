@@ -77,11 +77,12 @@ type UniqueInsight struct {
 }
 
 type GraftResult struct {
-	FinalAnswer string         `json:"final_answer"`
-	Panel       []PanelResult  `json:"panel"`
-	Judge       *JudgeAnalysis `json:"judge,omitempty"`
-	JudgeRaw    string         `json:"judge_raw,omitempty"`
-	DurationMs  int64          `json:"duration_ms"`
+	FinalAnswer   string         `json:"final_answer"`
+	Panel         []PanelResult  `json:"panel"`
+	Judge         *JudgeAnalysis `json:"judge,omitempty"`
+	JudgeRaw      string         `json:"judge_raw,omitempty"`
+	DurationMs    int64          `json:"duration_ms"`
+	ContextWindow int            `json:"context_window,omitempty"` // effective limit (0 = unlimited)
 }
 
 // ---------- Engine ----------
@@ -107,8 +108,19 @@ func (e *Engine) Run(ctx context.Context, req GraftRequest) (*GraftResult, error
 		return nil, err
 	}
 
+	// Calculate effective context limit (smallest model in pipeline).
+	ctxLimit := effectiveContextForPipeline(e.cfg, panelModels, judgeModel, finalModel)
+
+	// Truncate conversation for each stage.
+	// Panel: system prompt (~200 tokens) + user messages. Reserve 2000 for response.
+	panelConversation := truncateConversation(req.Messages, ctxLimit, 2000)
+	// Judge: system prompt (~400 tokens) + panel answers + conversation. Reserve 1500 for response.
+	judgeConversation := truncateConversation(req.Messages, ctxLimit, 4000)
+	// Final: system prompt (~300 tokens) + judge analysis + panel answers. Reserve 2000 for response.
+	finalConversation := truncateConversation(req.Messages, ctxLimit, 3500)
+
 	// Stage 1: Panel
-	panelResults := e.runPanel(ctx, req.Messages, panelModels)
+	panelResults := e.runPanel(ctx, panelConversation, panelModels)
 
 	var answers []string
 	for _, r := range panelResults {
@@ -121,31 +133,34 @@ func (e *Engine) Run(ctx context.Context, req GraftRequest) (*GraftResult, error
 	}
 
 	// Stage 2: Judge
-	judgeAnalysis, judgeRaw, err := e.runJudge(ctx, req.Messages, answers, judgeModel)
+	judgeAnalysis, judgeRaw, err := e.runJudge(ctx, judgeConversation, answers, judgeModel)
 	if err != nil {
 		return &GraftResult{
-			FinalAnswer: panelResults[0].Answer,
-			Panel:       panelResults,
-			DurationMs:  time.Since(start).Milliseconds(),
+			FinalAnswer:   panelResults[0].Answer,
+			Panel:         panelResults,
+			DurationMs:    time.Since(start).Milliseconds(),
+			ContextWindow: ctxLimit,
 		}, nil
 	}
 
 	// Stage 3: Final
-	finalAnswer, err := e.runFinal(ctx, req.Messages, judgeAnalysis, panelResults, finalModel)
+	finalAnswer, err := e.runFinal(ctx, finalConversation, judgeAnalysis, panelResults, finalModel)
 	if err != nil {
 		return &GraftResult{
-			FinalAnswer: judgeRaw,
-			Panel:       panelResults,
-			Judge:       judgeAnalysis,
-			DurationMs:  time.Since(start).Milliseconds(),
+			FinalAnswer:   judgeRaw,
+			Panel:         panelResults,
+			Judge:         judgeAnalysis,
+			DurationMs:    time.Since(start).Milliseconds(),
+			ContextWindow: ctxLimit,
 		}, nil
 	}
 
 	return &GraftResult{
-		FinalAnswer: finalAnswer,
-		Panel:       panelResults,
-		Judge:       judgeAnalysis,
-		DurationMs:  time.Since(start).Milliseconds(),
+		FinalAnswer:   finalAnswer,
+		Panel:         panelResults,
+		Judge:         judgeAnalysis,
+		DurationMs:    time.Since(start).Milliseconds(),
+		ContextWindow: ctxLimit,
 	}, nil
 }
 
@@ -159,6 +174,11 @@ func (e *Engine) RunStream(ctx context.Context, req GraftRequest, w io.Writer, f
 		return
 	}
 
+	ctxLimit := effectiveContextForPipeline(e.cfg, panelModels, judgeModel, finalModel)
+	panelConversation := truncateConversation(req.Messages, ctxLimit, 2000)
+	judgeConversation := truncateConversation(req.Messages, ctxLimit, 4000)
+	finalConversation := truncateConversation(req.Messages, ctxLimit, 3500)
+
 	pingTicker := time.NewTicker(15 * time.Second)
 	defer pingTicker.Stop()
 	go func() {
@@ -169,7 +189,7 @@ func (e *Engine) RunStream(ctx context.Context, req GraftRequest, w io.Writer, f
 
 	// --- Stage 1: Panel ---
 	e.sendSSE(w, flusher, SSEEvent{Type: "stage", Stage: "panel"})
-	panelResults := e.runPanelStream(ctx, req.Messages, panelModels, w, flusher)
+	panelResults := e.runPanelStream(ctx, panelConversation, panelModels, w, flusher)
 
 	var answers []string
 	for _, r := range panelResults {
@@ -184,7 +204,7 @@ func (e *Engine) RunStream(ctx context.Context, req GraftRequest, w io.Writer, f
 
 	// --- Stage 2: Judge ---
 	e.sendSSE(w, flusher, SSEEvent{Type: "stage", Stage: "judge"})
-	judgeAnalysis, judgeRaw, err := e.runJudgeStream(ctx, req.Messages, answers, judgeModel, w, flusher)
+	judgeAnalysis, judgeRaw, err := e.runJudgeStream(ctx, judgeConversation, answers, judgeModel, w, flusher)
 	if err != nil {
 		e.sendSSE(w, flusher, SSEEvent{Type: "stage", Stage: "final"})
 		e.sendSSE(w, flusher, SSEEvent{Type: "content", Content: panelResults[0].Answer})
@@ -194,7 +214,7 @@ func (e *Engine) RunStream(ctx context.Context, req GraftRequest, w io.Writer, f
 
 	// --- Stage 3: Final ---
 	e.sendSSE(w, flusher, SSEEvent{Type: "stage", Stage: "final"})
-	finalAnswer, err := e.runFinalStream(ctx, req.Messages, judgeAnalysis, panelResults, finalModel, w, flusher)
+	finalAnswer, err := e.runFinalStream(ctx, finalConversation, judgeAnalysis, panelResults, finalModel, w, flusher)
 	if err != nil {
 		e.sendSSE(w, flusher, SSEEvent{Type: "content", Content: judgeRaw})
 		e.sendSSE(w, flusher, SSEEvent{Type: "done"})
@@ -205,9 +225,10 @@ func (e *Engine) RunStream(ctx context.Context, req GraftRequest, w io.Writer, f
 	e.sendSSE(w, flusher, SSEEvent{
 		Type: "result",
 		Data: GraftResult{
-			Panel:    panelResults,
-			Judge:    judgeAnalysis,
-			DurationMs: time.Since(start).Milliseconds(),
+			Panel:         panelResults,
+			Judge:         judgeAnalysis,
+			DurationMs:    time.Since(start).Milliseconds(),
+			ContextWindow: ctxLimit,
 		},
 	})
 	e.sendSSE(w, flusher, SSEEvent{Type: "done"})
@@ -630,4 +651,100 @@ func errText(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// ---------- Context window management ----------
+
+// estimateTokens rough-estimates token count (~4 chars per token).
+func estimateTokens(text string) int {
+	if len(text) == 0 {
+		return 0
+	}
+	return len(text) / 4
+}
+
+// conversationTokens estimates total tokens in a message array.
+func conversationTokens(messages []llm.Message) int {
+	total := 0
+	for _, m := range messages {
+		total += estimateTokens(m.Content)
+		total += 4 // role + formatting overhead
+	}
+	return total
+}
+
+// truncateConversation trims old messages to fit within a token budget.
+// Strategy: keep system prompt (first message if role=system), keep the last N messages
+// that fit, drop oldest middle messages.
+// headroom is reserved for the model's response and the system prompt.
+func truncateConversation(messages []llm.Message, contextWindow, headroom int) []llm.Message {
+	if contextWindow <= 0 || len(messages) == 0 {
+		return messages
+	}
+
+	budget := contextWindow - headroom
+	if budget <= 0 {
+		// Context is too small — return only the last message.
+		if len(messages) > 0 {
+			return messages[len(messages)-1:]
+		}
+		return messages
+	}
+
+	// Separate system prompt from the rest.
+	systemIdx := -1
+	if messages[0].Role == "system" {
+		systemIdx = 0
+	}
+
+	var systemMsg llm.Message
+	var rest []llm.Message
+	if systemIdx >= 0 {
+		systemMsg = messages[0]
+		rest = messages[1:]
+	} else {
+		rest = messages
+	}
+
+	systemTokens := estimateTokens(systemMsg.Content) + 4
+	remaining := budget - systemTokens
+	if remaining <= 0 {
+		// System prompt alone exceeds budget — return only last message.
+		return messages[len(messages)-1:]
+	}
+
+	// Greedily include messages from the end (most recent first).
+	selected := make([]llm.Message, 0, len(rest))
+	totalTokens := 0
+	for i := len(rest) - 1; i >= 0; i-- {
+		msgTokens := estimateTokens(rest[i].Content) + 4
+		if totalTokens+msgTokens > remaining {
+			break
+		}
+		totalTokens += msgTokens
+		selected = append(selected, rest[i])
+	}
+
+	// Reverse selected to restore chronological order.
+	for i, j := 0, len(selected)-1; i < j; i, j = i+1, j-1 {
+		selected[i], selected[j] = selected[j], selected[i]
+	}
+
+	// Reconstruct: system + selected messages.
+	result := make([]llm.Message, 0, 1+len(selected))
+	if systemIdx >= 0 {
+		result = append(result, systemMsg)
+	}
+	result = append(result, selected...)
+
+	return result
+}
+
+// effectiveContextForPipeline returns the smallest context_window among all models
+// in a pipeline stage. Returns 0 if any model has unknown context.
+func effectiveContextForPipeline(cfg *config.Config, panelRefs []string, judgeRef, finalRef string) int {
+	allRefs := make([]string, 0, len(panelRefs)+2)
+	allRefs = append(allRefs, panelRefs...)
+	allRefs = append(allRefs, judgeRef, finalRef)
+	return cfg.MinContextWindow(allRefs)
 }
