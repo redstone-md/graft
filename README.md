@@ -1,28 +1,33 @@
-# Fusion Orchestrator
+# Graft
 
-Go + Gin prototype of multi-model fusion — OpenAI-compatible API with streaming and auth.
-
-## Architecture
+Multi-model pipeline orchestrator with OpenAI-compatible API. Graft runs your prompt through a panel of models in parallel, has a judge cross-compare their answers, and synthesizes the best possible final response.
 
 ```
-POST /v1/chat/completions (Authorization: Bearer <token>)
+POST /v1/chat/completions
     ↓
 model: "default" / "cheap" / "premium" / "fast"?
-    ├── YES (fusion profile) → [Panel] → [Judge] → [Final] → SSE stream
-    └── NO  (model ref)       → proxy to provider as-is
+    ├── YES (profile) → [Panel] → [Judge] → [Final] → SSE stream
+    └── NO  (model)    → proxy to provider as-is
 ```
 
 ## Quick Start
 
 ```bash
-cd fusion
 cp config.example.yaml config.yaml
 # edit config.yaml — set auth_token, api_key for providers
 
-go run ./cmd/fusion/ -config config.yaml
+go run ./cmd/graft/ -config config.yaml
 ```
 
-## Configuration (config.yaml)
+## How it works
+
+1. **Panel** — N models answer the user's message independently (parallel, with full conversation context)
+2. **Judge** — reads the conversation + all panel answers, evaluates each on factual correctness / completeness / reasoning depth, cross-compares, and produces a structured JSON analysis (consensus, contradictions, blind spots, merge recommendation)
+3. **Final** — synthesizes the best answer following the judge's analysis
+
+This is not "pick the longest answer." It's **analyze + merge**.
+
+## Configuration
 
 ```yaml
 server:
@@ -48,7 +53,7 @@ models:
     provider: openrouter
     model: "anthropic/claude-opus-4"
 
-fusion:
+profiles:
   default:
     panel: [deepseek-v4, gemini-flash, kimi]
     judge: claude-opus
@@ -57,6 +62,10 @@ fusion:
     panel: [gemini-flash, kimi]
     judge: deepseek-v4
     final: deepseek-v4
+  premium:
+    panel: [claude-opus, deepseek-v4, gemini-flash]
+    judge: claude-opus
+    final: claude-opus
 ```
 
 ## Usage
@@ -86,66 +95,50 @@ curl -N http://localhost:8080/v1/chat/completions \
   }'
 ```
 
-SSE events (with keepalive pings every 15s):
-
-```
-data: {"type":"stage","stage":"panel"}
-data: {"type":"content","model":"deepseek-v4","content":"Quantum computing is..."}
-data: {"type":"content","model":"gemini-flash","content":"At its core..."}
-data: {"type":"ping"}
-data: {"type":"stage","stage":"judge"}
-data: {"type":"content","model":"claude-opus","content":"..."}
-data: {"type":"stage","stage":"final"}
-data: {"type":"content","model":"claude-opus","content":"Quantum computing is a type of computation..."}
-data: {"type":"result","data":{...}}
-data: {"type":"done"}
-```
-
-### Direct model proxy (non-fusion)
-
-Any model ref from `models:` section works as a pass-through:
+### Agentic (full conversation)
 
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-secret-token" \
   -d '{
-    "model": "deepseek-v4",
-    "messages": [{"role": "user", "content": "Hello"}]
+    "model": "default",
+    "messages": [
+      {"role": "system", "content": "You are a helpful assistant."},
+      {"role": "user", "content": "What is Rust?"},
+      {"role": "assistant", "content": "Rust is a systems programming language..."},
+      {"role": "user", "content": "How does its ownership system work?"}
+    ]
   }'
 ```
 
+Panel models receive the full conversation and answer the latest turn with full context.
+
 ## Use with agents
-
-### OpenCode
-
-```json
-{
-  "provider": {
-    "name": "fusion",
-    "api_key": "your-secret-token",
-    "base_url": "http://localhost:8080/v1"
-  },
-  "model": "default"
-}
-```
 
 ### Python (OpenAI SDK)
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(
-    base_url="http://localhost:8080/v1",
-    api_key="your-secret-token",
-)
+client = OpenAI(base_url="http://localhost:8080/v1", api_key="your-secret-token")
 
-# Non-streaming
+# Single message
 response = client.chat.completions.create(
     model="default",
     messages=[{"role": "user", "content": "Explain quantum computing"}]
 )
-print(response.choices[0].message.content)
+
+# Full conversation
+response = client.chat.completions.create(
+    model="default",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is Rust?"},
+        {"role": "assistant", "content": "Rust is a systems programming language..."},
+        {"role": "user", "content": "How does ownership work?"},
+    ]
+)
 
 # Streaming
 stream = client.chat.completions.create(
@@ -163,23 +156,35 @@ for chunk in stream:
 ```python
 from langchain_openai import ChatOpenAI
 
-llm = ChatOpenAI(
-    model="default",
-    base_url="http://localhost:8080/v1",
-    api_key="your-secret-token",
-)
+llm = ChatOpenAI(model="default", base_url="http://localhost:8080/v1", api_key="your-secret-token")
 ```
+
+## SSE events
+
+```
+data: {"type":"stage","stage":"panel"}
+data: {"type":"content","model":"deepseek-v4","content":"..."}
+data: {"type":"content","model":"gemini-flash","content":"..."}
+data: {"type":"ping"}
+data: {"type":"stage","stage":"judge"}
+data: {"type":"content","model":"claude-opus","content":"..."}
+data: {"type":"stage","stage":"final"}
+data: {"type":"content","model":"claude-opus","content":"..."}
+data: {"type":"result","data":{...}}
+data: {"type":"done"}
+```
+
+Keepalive pings every 15s during long operations.
 
 ## Validation
 
-Config is validated on startup. Errors are clear:
+Config is validated on startup:
 
 ```
 config validation failed:
   - server.auth_token: required (used to authenticate /v1 requests)
   - providers.openrouter.api_key: required
-  - models.deepseek-v4.provider: unknown provider "foo" (available: openrouter)
-  - fusion.default.panel[2]: unknown model "bar" (available: deepseek-v4, gemini-flash, ...)
+  - profiles.default.panel[2]: unknown model "bar" (available: deepseek-v4, gemini-flash, ...)
 ```
 
 ## Endpoints
@@ -187,5 +192,9 @@ config validation failed:
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `POST` | `/v1/chat/completions` | Bearer | OpenAI-compatible chat completion |
-| `GET` | `/v1/models` | Bearer | List available models and profiles |
+| `GET` | `/v1/models` | Bearer | List available profiles and models |
 | `GET` | `/health` | — | Health check |
+
+## License
+
+MIT

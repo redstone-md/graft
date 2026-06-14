@@ -11,6 +11,8 @@
 # Output
 *.out
 /fusion
+/graft
+/dist
 
 # Config (has secrets)
 config.yaml
