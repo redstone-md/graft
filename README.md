@@ -4,6 +4,11 @@
 </p>
 
 <p align="center">
+  <a href="README.ru.md"><img src="https://img.shields.io/badge/🇷🇺-Русский-blue" alt="Русский"></a>
+  <a href="README.md"><img src="https://img.shields.io/badge/🇬🇧-English-blue" alt="English"></a>
+</p>
+
+<p align="center">
   <a href="https://github.com/redstone-md/graft/actions"><img src="https://github.com/redstone-md/graft/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/redstone-md/graft/releases"><img src="https://img.shields.io/github/v/release/redstone-md/graft" alt="Release"></a>
   <a href="https://github.com/redstone-md/graft/blob/main/LICENSE"><img src="https://img.shields.io/github/license/redstone-md/graft" alt="License"></a>
@@ -12,116 +17,116 @@
 
 ---
 
-**Graft** — это оркестратор, который прогоняет ваш промпт через несколько LLM параллельно, затем судья-модель кросс-сравнивает ответы и выдаёт структурированный анализ, а финальная модель синтезирует лучший возможный ответ.
+**Graft** is an orchestrator that runs your prompt through multiple LLMs in parallel, then a judge model cross-compares their answers and produces a structured analysis, and a final model synthesizes the best possible response.
 
-Это не "выбрать самое длинное". Это **анализ + слияние**.
+This is not "pick the longest answer." It's **analyze + merge**.
 
-## Как это работает
+## How it works
 
 ```
-Пользователь → POST /v1/chat/completions
+User → POST /v1/chat/completions
     ↓
-[Panel] ──→ DeepSeek V4 ──→ ответ1 ─┐
-        ──→ Gemini Flash ──→ ответ2 ─┤
-        ──→ Kimi K2.6    ──→ ответ3 ─┘
-                                      ↓
-                        [Judge] ──→ JSON-анализ:
-                                      • evaluations (оценка каждого ответа)
-                                      • consensus (общие моменты)
-                                      • contradictions (противоречия + кто прав)
-                                      • blind_spots (чего не хватает)
-                                      • recommendation (стратегия слияния)
-                                      ↓
-                        [Final] ──→ финальный ответ
+[Panel] ──→ DeepSeek V4 ──→ answer1 ─┐
+        ──→ Gemini Flash ──→ answer2 ─┤
+        ──→ Kimi K2.6    ──→ answer3 ─┘
+                                   ↓
+                     [Judge] ──→ JSON analysis:
+                                   • evaluations (per-answer quality)
+                                   • consensus (shared points)
+                                   • contradictions (disagreements + who's right)
+                                   • blind_spots (what's missing)
+                                   • recommendation (merge strategy)
+                                   ↓
+                     [Final] ──→ final answer
 ```
 
-### Этап 1: Panel (параллельно)
+### Stage 1: Panel (parallel)
 
-N моделей получают **полную историю диалога** и отвечают независимо друг от друга. Каждая модель работает со своим контекстом — никакого перекрёстного влияния.
+N models receive the **full conversation history** and answer independently. No cross-contamination between models.
 
-### Этап 2: Judge (сравнение)
+### Stage 2: Judge (comparison)
 
-Модель-судья получает все ответы панели и **оценивает каждый** по оси:
-- Фактическая корректность
-- Полнота покрытия
-- Глубина рассуждений
+The judge model receives all panel answers and **evaluates each** on:
+- Factual correctness
+- Coverage completeness
+- Reasoning depth
 
-Затем строит кросс-сравнение: где согласие, где противоречия (и кто прав), какие инсайты уникальны, каких тем нет ни у кого.
+Then builds cross-comparison: where they agree, where they contradict (and who's right), which insights are unique, which topics nobody covered.
 
-### Этап 3: Final (синтез)
+### Stage 3: Final (synthesis)
 
-Модель-синтезатор берёт анализ судьи и **пишет единый ответ**, который:
-- Берёт лучшее из каждого ответа панели
-- Разрешает противоречия по вердикту судьи
-- Покрывает blind spots из своего знания
-- Исключает ошибки отмеченные судьёй
+The synthesizer takes the judge's analysis and **writes a single answer** that:
+- Takes the best from each panel answer
+- Resolves contradictions per the judge's verdict
+- Covers blind spots from its own knowledge
+- Excludes errors flagged by the judge
 
-## Пример
+## Example
 
-**Вопрос:** "Мойка машин в 100м от дома — идти пешком или ехать на машине?"
+**Question:** "Car wash is 100m from home — should I drive or walk?"
 
-**Панель:**
-- DeepSeek: "Идти пешком. 100м — это минута, машина тратит топливо..."
-- Gemini: "Идти пешком. Парковка, запуск двигателя..."
-- Kimi: "Ехать на машине. Смысл мойки — помыть машину, а она должна быть на месте."
+**Panel:**
+- DeepSeek: "Walk. 100m is a minute, cars waste fuel..."
+- Gemini: "Walk. Parking, starting the engine..."
+- Kimi: "Drive. The point of a car wash is to wash your car — it needs to be there."
 
 **Judge:**
-- Противоречие: 2 против 1. Verdict: "Kimi прав — на мойку нужно приехать на машине, иначемыть нечего."
-- Blind spot: "Вопрос подразумевает что машина уже дома — это не было явно сказано."
+- Contradiction: 2 vs 1. Verdict: "Kimi is right — you need to arrive with the car, otherwise there's nothing to wash."
+- Blind spot: "The question implies the car is already at home — not explicitly stated."
 
-**Final:** "Ехать на машину. Мойка предназначена для мытья автомобиля — если вы придёте пешком, машину помыть не удастся. 100м — расстояние пренебрежимо малое, расход топлива несущественный."
+**Final:** "Drive. A car wash is for washing your vehicle — walking there means arriving without your car. 100m is negligible distance, fuel consumption is insignificant."
 
-## Быстрый старт
+## Quick Start
 
 ```bash
-# Скачайте бинарник
+# Download binary
 # https://github.com/redstone-md/graft/releases
 
-# Или соберите из исходников
+# Or build from source
 git clone https://github.com/redstone-md/graft.git
 cd graft
 go build -o graft ./cmd/graft/
 
-# Настройте конфиг
+# Configure
 cp config.example.yaml config.yaml
-# отредактируйте config.yaml — впишите auth_token и api_key
+# edit config.yaml — set auth_token and api_key
 
-# Запустите
+# Run
 ./graft -config config.yaml
 ```
 
-Подробная инструкция по настройке: **[docs/SETUP.md](docs/SETUP.md)**
+Detailed setup guide: **[docs/SETUP.md](docs/SETUP.md)**
 
-## Использование
+## Usage
 
 ### Python (OpenAI SDK)
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:8080/v1", api_key="ваш-токен")
+client = OpenAI(base_url="http://localhost:8080/v1", api_key="your-token")
 
-# Простой запрос
+# Simple request
 response = client.chat.completions.create(
     model="default",
-    messages=[{"role": "user", "content": "Объясни квантовые вычисления"}]
+    messages=[{"role": "user", "content": "Explain quantum computing"}]
 )
 
-# Полный диалог (agentic)
+# Full conversation (agentic)
 response = client.chat.completions.create(
     model="premium",
     messages=[
-        {"role": "system", "content": "Ты полезный ассистент."},
-        {"role": "user", "content": "Что такое Rust?"},
-        {"role": "assistant", "content": "Rust — язык системного программирования..."},
-        {"role": "user", "content": "Как работает система владения?"},
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is Rust?"},
+        {"role": "assistant", "content": "Rust is a systems programming language..."},
+        {"role": "user", "content": "How does ownership work?"},
     ]
 )
 
-# Стриминг
+# Streaming
 stream = client.chat.completions.create(
     model="default",
-    messages=[{"role": "user", "content": "Привет"}],
+    messages=[{"role": "user", "content": "Hello"}],
     stream=True,
 )
 for chunk in stream:
@@ -137,7 +142,7 @@ from langchain_openai import ChatOpenAI
 llm = ChatOpenAI(
     model="default",
     base_url="http://localhost:8080/v1",
-    api_key="ваш-токен",
+    api_key="your-token",
 )
 ```
 
@@ -146,20 +151,20 @@ llm = ChatOpenAI(
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer ваш-токен" \
+  -H "Authorization: Bearer your-token" \
   -d '{
     "model": "default",
-    "messages": [{"role": "user", "content": "Привет!"}]
+    "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
 
-## SSE события (стриминг)
+## SSE Events (streaming)
 
 ```
 data: {"type":"stage","stage":"panel"}
 data: {"type":"content","model":"deepseek-v4","content":"..."}
 data: {"type":"content","model":"gemini-flash","content":"..."}
-data: {"type":"ping"}                                    ← keepalive каждые 15с
+data: {"type":"ping"}                                    ← keepalive every 15s
 data: {"type":"stage","stage":"judge"}
 data: {"type":"content","model":"claude-opus","content":"..."}
 data: {"type":"stage","stage":"final"}
@@ -170,18 +175,18 @@ data: {"type":"done"}
 
 ## Endpoints
 
-| Метод | Путь | Auth | Описание |
+| Method | Path | Auth | Description |
 |---|---|---|---|
-| `POST` | `/v1/chat/completions` | Bearer | OpenAI-совместимый chat completion |
-| `GET` | `/v1/models` | Bearer | Список профилей и моделей |
+| `POST` | `/v1/chat/completions` | Bearer | OpenAI-compatible chat completion |
+| `GET` | `/v1/models` | Bearer | List profiles and models |
 | `GET` | `/health` | — | Health check |
 
-## Конфигурация
+## Configuration
 
 ```yaml
 server:
   port: "8080"
-  auth_token: "ваш-токен"
+  auth_token: "your-token"
 
 providers:
   openrouter:
@@ -201,41 +206,41 @@ profiles:
     final: claude-opus
 ```
 
-Полное описание конфигурации: **[docs/SETUP.md](docs/SETUP.md)**
+Full configuration guide: **[docs/SETUP.md](docs/SETUP.md)**
 
-## Идеи проекта
+## Project Ideas
 
-Graft создан как **building block** для агентных систем. Вот что можно построить:
+Graft is a **building block** for agentic systems. Here's what you can build:
 
-- **Агент-ассистент** с multiple-perspective reasoning — каждый ответ проверяется несколькими моделями перед выдачей
-- **Code review бот** — панель из coding-моделей параллельно анализирует PR, судья находит конфликты
-- **Research assistant** — автоматический поиск + синтез из нескольких источников с оценкой достоверности
-- **Decision support** — для критических решений когда ошибка дорога (юридические, медицинские, финансовые вопросы)
-- **Multi-model fallback** — если одна модель упала, другие продолжают работу
-- **Кастомные пайплайны** — создавайте профили под конкретные задачи: дешёвые для простых вопросов, премиум для сложных
+- **Multi-perspective agent** — every response is verified by multiple models before delivery
+- **Code review bot** — panel of coding models analyzes PRs in parallel, judge finds conflicts
+- **Research assistant** — automatic search + synthesis from multiple sources with credibility scoring
+- **Decision support** — for critical decisions where errors are costly (legal, medical, financial)
+- **Multi-model fallback** — if one model fails, others continue
+- **Custom pipelines** — create profiles for specific tasks: cheap for simple questions, premium for complex
 
-## Контекст и лимиты
+## Context and Limits
 
-Graft автоматически считает эффективный контекст пайплайна:
+Graft automatically calculates the effective pipeline context:
 
 ```
-effective_context = min(context_window) всех моделей в pipeline
+effective_context = min(context_window) of all models in pipeline
 ```
 
-Если у вас deepseek-v4 (128K) и gemini-flash (1M), контекст будет **128K** — потому что deepseek не влезет больше. Старые сообщения обрезаются автоматически.
+If you have deepseek-v4 (128K) and gemini-flash (1M), context will be **128K** — because deepseek can't handle more. Old messages are trimmed automatically.
 
-Подробнее: **[docs/SETUP.md](docs/SETUP.md#настройка-моделей)**
+More details: **[docs/SETUP.md](docs/SETUP.md#model-setup)**
 
 ## CI/CD
 
-Каждый push/PR запускает `go vet` + `go build`. На теги `v*` автоматически создаётся релиз с бинарниками для Linux, macOS и Windows.
+Every push/PR runs `go vet` + `go build`. On `v*` tags, a release is automatically created with binaries for Linux, macOS, and Windows.
 
 ```bash
 git tag v1.0.0
 git push --tags
-# → GitHub Actions соберёт бинарники и создаст Release
+# → GitHub Actions builds binaries and creates a Release
 ```
 
-## Лицензия
+## License
 
 [MIT](LICENSE)
