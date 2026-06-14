@@ -36,11 +36,36 @@ type GraftRequest struct {
 	Stream       bool          `json:"stream,omitempty"`
 }
 
+// ModelMetrics holds per-model call telemetry.
+type ModelMetrics struct {
+	Model        string  `json:"model"`
+	Stage        string  `json:"stage"`                    // panel | judge | final
+	TTFTMs       int64   `json:"ttft_ms"`                  // time to first token (ms)
+	DurationMs   int64   `json:"duration_ms"`              // total call duration (ms)
+	TokenCount   int     `json:"token_count"`              // chunks/tokens received
+	TokensPerSec float64 `json:"tokens_per_sec"`           // token throughput
+	Error        string  `json:"error,omitempty"`           // non-empty on failure
+}
+
+// PipelineLog is the strictly-typed structured log entry for a full pipeline run.
+type PipelineLog struct {
+	Timestamp    string          `json:"timestamp"`
+	Method       string          `json:"method"`
+	Path         string          `json:"path"`
+	StatusCode   int             `json:"status_code"`
+	DurationMs   int64           `json:"duration_ms"`
+	Profile      string          `json:"profile"`
+	ContextLimit int             `json:"context_limit"`
+	Models       []ModelMetrics  `json:"models"`
+	Error        string          `json:"error,omitempty"`
+}
+
 type PanelResult struct {
-	Model    string `json:"model"`
-	Answer   string `json:"answer"`
-	Duration int64  `json:"duration_ms"`
-	Error    string `json:"error,omitempty"`
+	Model    string        `json:"model"`
+	Answer   string        `json:"answer"`
+	Duration int64         `json:"duration_ms"`
+	Error    string        `json:"error,omitempty"`
+	Metrics  *ModelMetrics `json:"metrics,omitempty"`
 }
 
 type ModelEvaluation struct {
@@ -77,12 +102,13 @@ type UniqueInsight struct {
 }
 
 type GraftResult struct {
-	FinalAnswer   string         `json:"final_answer"`
-	Panel         []PanelResult  `json:"panel"`
-	Judge         *JudgeAnalysis `json:"judge,omitempty"`
-	JudgeRaw      string         `json:"judge_raw,omitempty"`
-	DurationMs    int64          `json:"duration_ms"`
-	ContextWindow int            `json:"context_window,omitempty"` // effective limit (0 = unlimited)
+	FinalAnswer   string          `json:"final_answer"`
+	Panel         []PanelResult   `json:"panel"`
+	Judge         *JudgeAnalysis  `json:"judge,omitempty"`
+	JudgeRaw      string          `json:"judge_raw,omitempty"`
+	DurationMs    int64           `json:"duration_ms"`
+	ContextWindow int             `json:"context_window,omitempty"` // effective limit (0 = unlimited)
+	Metrics       []ModelMetrics  `json:"metrics,omitempty"`        // per-model telemetry
 }
 
 // ---------- Engine ----------
@@ -164,14 +190,26 @@ func (e *Engine) Run(ctx context.Context, req GraftRequest) (*GraftResult, error
 	}, nil
 }
 
-// RunStream executes the full pipeline and streams SSE events.
-func (e *Engine) RunStream(ctx context.Context, req GraftRequest, w io.Writer, flusher http.Flusher) {
-	start := time.Now()
+// StreamResult bundles streaming return values.
+type StreamResult struct {
+	Metrics       []ModelMetrics
+	ContextWindow int
+}
 
+// RunStream executes the full pipeline and streams SSE events.
+// Only OpenAI-compatible data events are written to the wire:
+//   - data: {"choices":[{"delta":{"content":"..."}}]}  (content chunks)
+//   - data: {"error":{...}}                              (errors)
+//   - data: [DONE]                                       (stream end)
+//
+// Internal events (stage transitions, pings, result metadata) are logged
+// via structured PipelineLog but NOT sent to the client.
+func (e *Engine) RunStream(ctx context.Context, req GraftRequest, w io.Writer, flusher http.Flusher) StreamResult {
 	panelModels, judgeModel, finalModel, err := e.resolveRefs(req)
 	if err != nil {
-		e.sendSSE(w, flusher, SSEEvent{Type: "error", Error: err.Error()})
-		return
+		e.sendSSEError(w, flusher, err.Error())
+		e.sendSSEDone(w, flusher)
+		return StreamResult{}
 	}
 
 	ctxLimit := effectiveContextForPipeline(e.cfg, panelModels, judgeModel, finalModel)
@@ -179,17 +217,17 @@ func (e *Engine) RunStream(ctx context.Context, req GraftRequest, w io.Writer, f
 	judgeConversation := truncateConversation(req.Messages, ctxLimit, 4000)
 	finalConversation := truncateConversation(req.Messages, ctxLimit, 3500)
 
+	// Keepalive — empty data lines every 15s to prevent proxy/client timeouts.
 	pingTicker := time.NewTicker(15 * time.Second)
 	defer pingTicker.Stop()
 	go func() {
 		for range pingTicker.C {
-			e.sendSSE(w, flusher, SSEEvent{Type: "ping"})
+			e.sendSSEKeepalive(w, flusher)
 		}
 	}()
 
 	// --- Stage 1: Panel ---
-	e.sendSSE(w, flusher, SSEEvent{Type: "stage", Stage: "panel"})
-	panelResults := e.runPanelStream(ctx, panelConversation, panelModels, w, flusher)
+	panelResults, panelMetrics := e.runPanelStream(ctx, panelConversation, panelModels, w, flusher)
 
 	var answers []string
 	for _, r := range panelResults {
@@ -198,40 +236,37 @@ func (e *Engine) RunStream(ctx context.Context, req GraftRequest, w io.Writer, f
 		}
 	}
 	if len(answers) == 0 {
-		e.sendSSE(w, flusher, SSEEvent{Type: "error", Error: "all panel models failed"})
-		return
+		e.sendSSEError(w, flusher, "all panel models failed")
+		e.sendSSEDone(w, flusher)
+		return StreamResult{Metrics: panelMetrics, ContextWindow: ctxLimit}
 	}
 
 	// --- Stage 2: Judge ---
-	e.sendSSE(w, flusher, SSEEvent{Type: "stage", Stage: "judge"})
-	judgeAnalysis, judgeRaw, err := e.runJudgeStream(ctx, judgeConversation, answers, judgeModel, w, flusher)
+	judgeAnalysis, judgeRaw, judgeMetrics, err := e.runJudgeStream(ctx, judgeConversation, answers, judgeModel, w, flusher)
+	allMetrics := append(panelMetrics, judgeMetrics)
 	if err != nil {
-		e.sendSSE(w, flusher, SSEEvent{Type: "stage", Stage: "final"})
-		e.sendSSE(w, flusher, SSEEvent{Type: "content", Content: panelResults[0].Answer})
-		e.sendSSE(w, flusher, SSEEvent{Type: "done"})
-		return
+		// Judge failed — fall back to best panel answer.
+		e.sendSSEContent(w, flusher, panelResults[0].Answer)
+		e.sendSSEDone(w, flusher)
+		return StreamResult{Metrics: allMetrics, ContextWindow: ctxLimit}
 	}
 
 	// --- Stage 3: Final ---
-	e.sendSSE(w, flusher, SSEEvent{Type: "stage", Stage: "final"})
-	finalAnswer, err := e.runFinalStream(ctx, finalConversation, judgeAnalysis, panelResults, finalModel, w, flusher)
+	finalAnswer, finalMetrics, err := e.runFinalStream(ctx, finalConversation, judgeAnalysis, panelResults, finalModel, w, flusher)
+	allMetrics = append(allMetrics, finalMetrics)
 	if err != nil {
-		e.sendSSE(w, flusher, SSEEvent{Type: "content", Content: judgeRaw})
-		e.sendSSE(w, flusher, SSEEvent{Type: "done"})
-		return
+		// Final failed — fall back to judge raw output.
+		e.sendSSEContent(w, flusher, judgeRaw)
+		e.sendSSEDone(w, flusher)
+		return StreamResult{Metrics: allMetrics, ContextWindow: ctxLimit}
 	}
 	_ = finalAnswer
 
-	e.sendSSE(w, flusher, SSEEvent{
-		Type: "result",
-		Data: GraftResult{
-			Panel:         panelResults,
-			Judge:         judgeAnalysis,
-			DurationMs:    time.Since(start).Milliseconds(),
-			ContextWindow: ctxLimit,
-		},
-	})
-	e.sendSSE(w, flusher, SSEEvent{Type: "done"})
+	// Pipeline complete — final answer already streamed by runFinalStream.
+	// Send [DONE] to signal end of stream.
+	e.sendSSEDone(w, flusher)
+
+	return StreamResult{Metrics: allMetrics, ContextWindow: ctxLimit}
 }
 
 // ---------- Ref resolution ----------
@@ -310,8 +345,9 @@ func (e *Engine) runPanel(ctx context.Context, messages []llm.Message, models []
 	return results
 }
 
-func (e *Engine) runPanelStream(ctx context.Context, messages []llm.Message, models []string, w io.Writer, f http.Flusher) []PanelResult {
+func (e *Engine) runPanelStream(ctx context.Context, messages []llm.Message, models []string, w io.Writer, f http.Flusher) ([]PanelResult, []ModelMetrics) {
 	results := make([]PanelResult, len(models))
+	metrics := make([]ModelMetrics, len(models))
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
@@ -323,9 +359,22 @@ func (e *Engine) runPanelStream(ctx context.Context, messages []llm.Message, mod
 			baseURL, apiKey, modelID, _ := e.cfg.ResolveModel(ref)
 			panelMsgs := buildPanelMessages(messages)
 
+			sm := &llm.StreamMetrics{}
 			start := time.Now()
 			full, err := e.client.StreamComplete(ctx, baseURL, apiKey, modelID, panelMsgs,
-				&streamAdapter{w: w, f: f, model: ref, mu: &mu})
+				&streamAdapter{w: w, f: f, model: ref, mu: &mu}, sm)
+
+			m := ModelMetrics{
+				Model:        ref,
+				Stage:        "panel",
+				TTFTMs:       sm.TTFT.Milliseconds(),
+				DurationMs:   sm.Duration.Milliseconds(),
+				TokenCount:   sm.TokenCount,
+				TokensPerSec: sm.TokensPerSec,
+			}
+			if err != nil {
+				m.Error = err.Error()
+			}
 
 			mu.Lock()
 			results[idx] = PanelResult{
@@ -333,13 +382,15 @@ func (e *Engine) runPanelStream(ctx context.Context, messages []llm.Message, mod
 				Answer:   full,
 				Duration: time.Since(start).Milliseconds(),
 				Error:    errText(err),
+				Metrics:  &m,
 			}
+			metrics[idx] = m
 			mu.Unlock()
 		}(i, model)
 	}
 
 	wg.Wait()
-	return results
+	return results, metrics
 }
 
 // buildPanelMessages prepends the panel system prompt to the conversation.
@@ -426,18 +477,33 @@ func (e *Engine) runJudge(ctx context.Context, conversation []llm.Message, answe
 	return parseJudgeAnalysis(raw)
 }
 
-func (e *Engine) runJudgeStream(ctx context.Context, conversation []llm.Message, answers []string, ref string, w io.Writer, f http.Flusher) (*JudgeAnalysis, string, error) {
+func (e *Engine) runJudgeStream(ctx context.Context, conversation []llm.Message, answers []string, ref string, w io.Writer, f http.Flusher) (*JudgeAnalysis, string, ModelMetrics, error) {
 	baseURL, apiKey, modelID, _ := e.cfg.ResolveModel(ref)
 	messages := buildJudgeMessages(conversation, answers)
 
+	sm := &llm.StreamMetrics{}
 	var mu sync.Mutex
 	raw, err := e.client.StreamComplete(ctx, baseURL, apiKey, modelID, messages,
-		&streamAdapter{w: w, f: f, model: ref, mu: &mu})
+		&streamAdapter{w: w, f: f, model: ref, mu: &mu}, sm)
+
+	m := ModelMetrics{
+		Model:        ref,
+		Stage:        "judge",
+		TTFTMs:       sm.TTFT.Milliseconds(),
+		DurationMs:   sm.Duration.Milliseconds(),
+		TokenCount:   sm.TokenCount,
+		TokensPerSec: sm.TokensPerSec,
+	}
 	if err != nil {
-		return nil, "", err
+		m.Error = err.Error()
 	}
 
-	return parseJudgeAnalysis(raw)
+	analysis, _, parseErr := parseJudgeAnalysis(raw)
+	if parseErr != nil {
+		return nil, raw, m, parseErr
+	}
+
+	return analysis, raw, m, nil
 }
 
 func buildJudgeMessages(conversation []llm.Message, answers []string) []llm.Message {
@@ -514,7 +580,7 @@ func (e *Engine) runFinal(ctx context.Context, conversation []llm.Message, analy
 	return e.callModelText(ctx, ref, messages)
 }
 
-func (e *Engine) runFinalStream(ctx context.Context, conversation []llm.Message, analysis *JudgeAnalysis, panel []PanelResult, ref string, w io.Writer, f http.Flusher) (string, error) {
+func (e *Engine) runFinalStream(ctx context.Context, conversation []llm.Message, analysis *JudgeAnalysis, panel []PanelResult, ref string, w io.Writer, f http.Flusher) (string, ModelMetrics, error) {
 	baseURL, apiKey, modelID, _ := e.cfg.ResolveModel(ref)
 
 	analysisJSON, _ := json.MarshalIndent(analysis, "", "  ")
@@ -528,14 +594,24 @@ func (e *Engine) runFinalStream(ctx context.Context, conversation []llm.Message,
 		)},
 	}
 
+	sm := &llm.StreamMetrics{}
 	var mu sync.Mutex
 	full, err := e.client.StreamComplete(ctx, baseURL, apiKey, modelID, messages,
-		&streamAdapter{w: w, f: f, model: ref, mu: &mu})
+		&streamAdapter{w: w, f: f, model: ref, mu: &mu}, sm)
+
+	m := ModelMetrics{
+		Model:        ref,
+		Stage:        "final",
+		TTFTMs:       sm.TTFT.Milliseconds(),
+		DurationMs:   sm.Duration.Milliseconds(),
+		TokenCount:   sm.TokenCount,
+		TokensPerSec: sm.TokensPerSec,
+	}
 	if err != nil {
-		return "", err
+		m.Error = err.Error()
 	}
 
-	return full, nil
+	return full, m, err
 }
 
 func formatPanelBrief(panel []PanelResult) string {
@@ -578,11 +654,47 @@ func (e *Engine) callModelText(ctx context.Context, ref string, messages []llm.M
 	return e.client.Complete(ctx, baseURL, apiKey, modelID, messages)
 }
 
+// sendSSE writes a line to the SSE stream. Only call this for OpenAI-compatible events.
+// Non-OpenAI events (stage, ping, result, done) must NOT be written to the wire —
+// clients (Vercel AI SDK) use fetch+ReadableStream, not EventSource, and parse ALL lines.
 func (e *Engine) sendSSE(w io.Writer, f http.Flusher, event SSEEvent) {
 	data, _ := json.Marshal(event)
 	fmt.Fprintf(w, "data: %s\n\n", data)
 	f.Flush()
 }
+
+// sendSSEContent sends an OpenAI-compatible content chunk.
+func (e *Engine) sendSSEContent(w io.Writer, f http.Flusher, content string) {
+	chunk := map[string]interface{}{
+		"choices": []map[string]interface{}{
+			{"delta": map[string]string{"content": content}},
+		},
+	}
+	data, _ := json.Marshal(chunk)
+	fmt.Fprintf(w, "data: %s\n\n", data)
+	f.Flush()
+}
+
+// sendSSEDone sends the OpenAI [DONE] signal.
+func (e *Engine) sendSSEDone(w io.Writer, f http.Flusher) {
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	f.Flush()
+}
+
+// sendSSEError sends an OpenAI-compatible error chunk.
+func (e *Engine) sendSSEError(w io.Writer, f http.Flusher, msg string) {
+	errObj := map[string]interface{}{
+		"error": map[string]string{"message": msg, "type": "server_error"},
+	}
+	data, _ := json.Marshal(errObj)
+	fmt.Fprintf(w, "data: %s\n\n", data)
+	f.Flush()
+}
+
+// sendSSEKeepalive is intentionally empty — the pipeline is sequential (panel→judge→final)
+// and takes seconds, so the connection is never idle during processing.
+// Sending any data line (even empty) breaks clients that parse all `data:` lines as JSON.
+func (e *Engine) sendSSEKeepalive(w io.Writer, f http.Flusher) {}
 
 type streamAdapter struct {
 	w     io.Writer
@@ -605,8 +717,13 @@ func (s *streamAdapter) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 
-	sseEvent := SSEEvent{Type: "content", Model: s.model, Content: chunk}
-	data, _ := json.Marshal(sseEvent)
+	// Send OpenAI-compatible SSE chunk so clients can parse it.
+	oc := map[string]interface{}{
+		"choices": []map[string]interface{}{
+			{"delta": map[string]string{"content": chunk}},
+		},
+	}
+	data, _ := json.Marshal(oc)
 	fmt.Fprintf(s.w, "data: %s\n\n", data)
 	s.f.Flush()
 

@@ -627,8 +627,8 @@ profiles:
 	}
 
 	min := cfg.MinContextWindow([]string{"claude", "gpt4"})
-	if min != 0 {
-		t.Errorf("min = %d, want 0 (unknown context should return 0)", min)
+	if min != 200000 {
+		t.Errorf("min = %d, want 200000 (unknown context models are skipped)", min)
 	}
 }
 

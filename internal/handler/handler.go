@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -159,7 +160,7 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 		return
 	}
 
-	isGraft := isGraftModel(req.Model) || hasGraftPlugin(req.Plugins)
+	isGraft := isGraftModel(req.Model) || h.isProfile(req.Model) || hasGraftPlugin(req.Plugins)
 
 	if isGraft {
 		if req.Stream {
@@ -196,6 +197,23 @@ func (h *Handler) handleGraft(c *gin.Context, req ChatCompletionRequest) {
 	resp.Usage.CompletionTokens = estimateTokens(result.FinalAnswer)
 	resp.Usage.TotalTokens = resp.Usage.PromptTokens + resp.Usage.CompletionTokens
 
+	// Structured pipeline log.
+	pLog := engine.PipelineLog{
+		Timestamp:    time.Now().UTC().Format(time.RFC3339),
+		Method:       c.Request.Method,
+		Path:         c.Request.URL.Path,
+		StatusCode:   http.StatusOK,
+		DurationMs:   result.DurationMs,
+		Profile:      profile,
+		ContextLimit: result.ContextWindow,
+		Models:       result.Metrics,
+	}
+	if pLog.Models == nil {
+		pLog.Models = []engine.ModelMetrics{}
+	}
+	logJSON, _ := json.MarshalIndent(pLog, "", "  ")
+	log.Println(string(logJSON))
+
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -216,8 +234,9 @@ func (h *Handler) handleGraftStream(c *gin.Context, req ChatCompletionRequest) {
 	}
 
 	profile, panelModels, judgeModel, finalModel := h.extractConfig(req.Model, req.Plugins)
+	start := time.Now()
 
-	h.engine.RunStream(c.Request.Context(), engine.GraftRequest{
+	result := h.engine.RunStream(c.Request.Context(), engine.GraftRequest{
 		Messages:    req.Messages,
 		Profile:     profile,
 		PanelModels: panelModels,
@@ -225,6 +244,24 @@ func (h *Handler) handleGraftStream(c *gin.Context, req ChatCompletionRequest) {
 		FinalModel:  finalModel,
 		Stream:      true,
 	}, c.Writer, flusher)
+
+	// Structured pipeline log.
+	metrics := result.Metrics
+	if metrics == nil {
+		metrics = []engine.ModelMetrics{}
+	}
+	pLog := engine.PipelineLog{
+		Timestamp:    time.Now().UTC().Format(time.RFC3339),
+		Method:       c.Request.Method,
+		Path:         c.Request.URL.Path,
+		StatusCode:   http.StatusOK,
+		DurationMs:   time.Since(start).Milliseconds(),
+		Profile:      profile,
+		ContextLimit: result.ContextWindow,
+		Models:       metrics,
+	}
+	logJSON, _ := json.MarshalIndent(pLog, "", "  ")
+	log.Println(string(logJSON))
 }
 
 // ---------- Proxy (non-graft) ----------
@@ -315,6 +352,11 @@ func (h *Handler) resolveModelForProxy(model string) (baseURL, apiKey, modelID s
 
 func isGraftModel(model string) bool {
 	_, ok := graftModels[model]
+	return ok
+}
+
+func (h *Handler) isProfile(model string) bool {
+	_, ok := h.cfg.Profiles[model]
 	return ok
 }
 

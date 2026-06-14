@@ -161,16 +161,14 @@ func (c *Config) ResolveModelFull(ref string) (ModelRef, error) {
 }
 
 // MinContextWindow returns the smallest context_window among the given model refs.
-// Returns 0 if any model has context_window=0 (unknown).
+// Returns 0 if no models have a known context_window (0 = no limit).
+// Models with context_window=0 (unknown) are skipped — they don't constrain the pipeline.
 func (c *Config) MinContextWindow(refs []string) int {
 	min := 0
 	for _, ref := range refs {
 		m, ok := c.Models[ref]
-		if !ok {
-			continue
-		}
-		if m.ContextWindow == 0 {
-			return 0 // unknown — can't constrain
+		if !ok || m.ContextWindow == 0 {
+			continue // skip unknown or unconstrained models
 		}
 		if min == 0 || m.ContextWindow < min {
 			min = m.ContextWindow

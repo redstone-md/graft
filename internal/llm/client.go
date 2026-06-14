@@ -47,10 +47,22 @@ type ChatResponse struct {
 type StreamEvent struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
+			Content         string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
+}
+
+// ---------- Metrics ----------
+
+// StreamMetrics holds per-model streaming telemetry.
+type StreamMetrics struct {
+	TTFT         time.Duration `json:"ttft_ms"`         // time to first token
+	Duration     time.Duration `json:"duration_ms"`     // total stream duration
+	TokenCount   int           `json:"token_count"`     // number of chunks received
+	TokensPerSec float64       `json:"tokens_per_sec"`  // tokens / duration
+	Error        string        `json:"error,omitempty"` // non-empty on failure
 }
 
 // ---------- Client ----------
@@ -106,18 +118,22 @@ func (c *Client) Complete(ctx context.Context, baseURL, apiKey, model string, me
 }
 
 // StreamComplete sends a streaming request and writes raw SSE chunks to writer.
-// Returns the full concatenated text.
+// Returns the full concatenated text and populates metrics if non-nil.
 func (c *Client) StreamComplete(
 	ctx context.Context,
 	baseURL, apiKey, model string,
 	messages []Message,
 	w io.Writer,
+	metrics *StreamMetrics,
 ) (string, error) {
 	reqBody := ChatRequest{Model: model, Messages: messages, Stream: true}
 	body, _ := json.Marshal(reqBody)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
+		if metrics != nil {
+			metrics.Error = err.Error()
+		}
 		return "", err
 	}
 
@@ -126,19 +142,30 @@ func (c *Client) StreamComplete(
 	req.Header.Set("HTTP-Referer", "https://github.com/redstone-md/graft")
 	req.Header.Set("X-Title", "Fusion Orchestrator")
 
+	start := time.Now()
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
+		if metrics != nil {
+			metrics.Error = err.Error()
+			metrics.Duration = time.Since(start)
+		}
 		return "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody))
+		errMsg := fmt.Sprintf("status %d: %s", resp.StatusCode, string(respBody))
+		if metrics != nil {
+			metrics.Error = errMsg
+			metrics.Duration = time.Since(start)
+		}
+		return "", fmt.Errorf("%s", errMsg)
 	}
 
 	var full strings.Builder
 	scanner := bufio.NewScanner(resp.Body)
+	firstToken := true
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -161,15 +188,34 @@ func (c *Client) StreamComplete(
 			continue
 		}
 
-		chunk := event.Choices[0].Delta.Content
-		if chunk != "" {
-			full.WriteString(chunk)
-			// Write raw SSE chunk to the adapter.
+		delta := event.Choices[0].Delta
+		hasContent := delta.Content != ""
+		hasReasoning := delta.ReasoningContent != ""
+
+		if hasContent || hasReasoning {
+			if firstToken && metrics != nil {
+				metrics.TTFT = time.Since(start)
+				firstToken = false
+			}
+			if delta.Content != "" {
+				full.WriteString(delta.Content)
+			}
+			if metrics != nil {
+				metrics.TokenCount++
+			}
+			// Write raw SSE chunk to the adapter (preserves upstream format).
 			fmt.Fprintf(w, "data: %s\n\n", data)
 		}
 	}
 
-	fmt.Fprintf(w, "data: [DONE]\n\n")
+	// NOTE: [DONE] is NOT sent here — the engine's RunStream handles stream termination.
+
+	if metrics != nil {
+		metrics.Duration = time.Since(start)
+		if metrics.Duration.Seconds() > 0 {
+			metrics.TokensPerSec = float64(metrics.TokenCount) / metrics.Duration.Seconds()
+		}
+	}
 
 	return full.String(), nil
 }

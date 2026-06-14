@@ -9,6 +9,34 @@ import (
 	"testing"
 )
 
+// testStreamEvent creates a StreamEvent with only content (no reasoning).
+func testStreamEvent(content string) StreamEvent {
+	return StreamEvent{
+		Choices: []struct {
+			Delta struct {
+				Content         string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+			} `json:"delta"`
+			FinishReason *string `json:"finish_reason"`
+		}{
+			{Delta: struct {
+				Content         string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+			}{Content: content}},
+		},
+	}
+}
+
+func testStreamEventEmpty() StreamEvent {
+	return StreamEvent{Choices: []struct {
+		Delta struct {
+			Content         string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
+		} `json:"delta"`
+		FinishReason *string `json:"finish_reason"`
+	}{}}
+}
+
 // ---------- Complete ----------
 
 func TestComplete_Success(t *testing.T) {
@@ -208,20 +236,7 @@ func TestStreamComplete_Success(t *testing.T) {
 		// Send chunks
 		chunks := []string{"Hello", " ", "world", "!"}
 		for _, chunk := range chunks {
-			event := StreamEvent{
-				Choices: []struct {
-					Delta struct {
-						Content string `json:"content"`
-					} `json:"delta"`
-					FinishReason *string `json:"finish_reason"`
-				}{
-					{
-						Delta: struct {
-							Content string `json:"content"`
-						}{Content: chunk},
-					},
-				},
-			}
+			event := testStreamEvent(chunk)
 			data, _ := json.Marshal(event)
 			w.Write([]byte("data: " + string(data) + "\n\n"))
 			flusher.Flush()
@@ -233,14 +248,24 @@ func TestStreamComplete_Success(t *testing.T) {
 
 	client := NewClient()
 	var received strings.Builder
+	sm := &StreamMetrics{}
 	result, err := client.StreamComplete(t.Context(), server.URL, "key", "model", []Message{
 		{Role: "user", Content: "Say hello"},
-	}, &received)
+	}, &received, sm)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result != "Hello world!" {
 		t.Errorf("result = %q, want %q", result, "Hello world!")
+	}
+	if sm.TokenCount != 4 {
+		t.Errorf("token_count = %d, want 4", sm.TokenCount)
+	}
+	if sm.TTFT == 0 {
+		t.Error("ttft should be > 0")
+	}
+	if sm.TokensPerSec <= 0 {
+		t.Error("tokens_per_sec should be > 0")
 	}
 }
 
@@ -250,27 +275,14 @@ func TestStreamComplete_EmptyChunks(t *testing.T) {
 		flusher := w.(http.Flusher)
 
 		// Send empty delta
-		event := StreamEvent{
-			Choices: []struct {
-				Delta struct {
-					Content string `json:"content"`
-				} `json:"delta"`
-				FinishReason *string `json:"finish_reason"`
-			}{
-				{
-					Delta: struct {
-						Content string `json:"content"`
-					}{Content: ""},
-				},
-			},
-		}
+		event := testStreamEvent("")
 		data, _ := json.Marshal(event)
 		w.Write([]byte("data: " + string(data) + "\n\n"))
 		flusher.Flush()
 
 		// Then real content
-		event.Choices[0].Delta.Content = "hi"
-		data, _ = json.Marshal(event)
+		event2 := testStreamEvent("hi")
+		data, _ = json.Marshal(event2)
 		w.Write([]byte("data: " + string(data) + "\n\n"))
 		flusher.Flush()
 
@@ -283,7 +295,7 @@ func TestStreamComplete_EmptyChunks(t *testing.T) {
 	var buf strings.Builder
 	result, err := client.StreamComplete(t.Context(), server.URL, "key", "model", []Message{
 		{Role: "user", Content: "Hi"},
-	}, &buf)
+	}, &buf, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -301,25 +313,33 @@ func TestStreamComplete_APIError(t *testing.T) {
 
 	client := NewClient()
 	var buf strings.Builder
+	sm := &StreamMetrics{}
 	_, err := client.StreamComplete(t.Context(), server.URL, "key", "model", []Message{
 		{Role: "user", Content: "Hi"},
-	}, &buf)
+	}, &buf, sm)
 	if err == nil {
 		t.Fatal("expected error for 400 status")
 	}
 	if !strings.Contains(err.Error(), "400") {
 		t.Errorf("error = %q, should mention status code", err.Error())
 	}
+	if sm.Error == "" {
+		t.Error("metrics.error should be set on failure")
+	}
 }
 
 func TestStreamComplete_ServerDown(t *testing.T) {
 	client := NewClient()
 	var buf strings.Builder
+	sm := &StreamMetrics{}
 	_, err := client.StreamComplete(t.Context(), "http://127.0.0.1:1", "key", "model", []Message{
 		{Role: "user", Content: "Hi"},
-	}, &buf)
+	}, &buf, sm)
 	if err == nil {
 		t.Fatal("expected error for connection refused")
+	}
+	if sm.Error == "" {
+		t.Error("metrics.error should be set on connection failure")
 	}
 }
 
@@ -333,20 +353,7 @@ func TestStreamComplete_MalformedJSON(t *testing.T) {
 		flusher.Flush()
 
 		// Then valid content
-		event := StreamEvent{
-			Choices: []struct {
-				Delta struct {
-					Content string `json:"content"`
-				} `json:"delta"`
-				FinishReason *string `json:"finish_reason"`
-			}{
-				{
-					Delta: struct {
-						Content string `json:"content"`
-					}{Content: "recovered"},
-				},
-			},
-		}
+		event := testStreamEvent("recovered")
 		data, _ := json.Marshal(event)
 		w.Write([]byte("data: " + string(data) + "\n\n"))
 		flusher.Flush()
@@ -360,7 +367,7 @@ func TestStreamComplete_MalformedJSON(t *testing.T) {
 	var buf strings.Builder
 	result, err := client.StreamComplete(t.Context(), server.URL, "key", "model", []Message{
 		{Role: "user", Content: "Hi"},
-	}, &buf)
+	}, &buf, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -381,20 +388,7 @@ func TestStreamComplete_NonDataLines(t *testing.T) {
 		flusher.Flush()
 
 		// Then valid content
-		event := StreamEvent{
-			Choices: []struct {
-				Delta struct {
-					Content string `json:"content"`
-				} `json:"delta"`
-				FinishReason *string `json:"finish_reason"`
-			}{
-				{
-					Delta: struct {
-						Content string `json:"content"`
-					}{Content: "ok"},
-				},
-			},
-		}
+		event := testStreamEvent("ok")
 		data, _ := json.Marshal(event)
 		w.Write([]byte("data: " + string(data) + "\n\n"))
 		flusher.Flush()
@@ -408,7 +402,7 @@ func TestStreamComplete_NonDataLines(t *testing.T) {
 	var buf strings.Builder
 	result, err := client.StreamComplete(t.Context(), server.URL, "key", "model", []Message{
 		{Role: "user", Content: "Hi"},
-	}, &buf)
+	}, &buf, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -422,31 +416,13 @@ func TestStreamComplete_NilChoices(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
 
-		event := StreamEvent{Choices: []struct {
-			Delta struct {
-				Content string `json:"content"`
-			} `json:"delta"`
-			FinishReason *string `json:"finish_reason"`
-		}{}}
+		event := testStreamEventEmpty()
 		data, _ := json.Marshal(event)
 		w.Write([]byte("data: " + string(data) + "\n\n"))
 		flusher.Flush()
 
 		// Then real content
-		event2 := StreamEvent{
-			Choices: []struct {
-				Delta struct {
-					Content string `json:"content"`
-				} `json:"delta"`
-				FinishReason *string `json:"finish_reason"`
-			}{
-				{
-					Delta: struct {
-						Content string `json:"content"`
-					}{Content: "ok"},
-				},
-			},
-		}
+		event2 := testStreamEvent("ok")
 		data2, _ := json.Marshal(event2)
 		w.Write([]byte("data: " + string(data2) + "\n\n"))
 		flusher.Flush()
@@ -460,7 +436,7 @@ func TestStreamComplete_NilChoices(t *testing.T) {
 	var buf strings.Builder
 	result, err := client.StreamComplete(t.Context(), server.URL, "key", "model", []Message{
 		{Role: "user", Content: "Hi"},
-	}, &buf)
+	}, &buf, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
