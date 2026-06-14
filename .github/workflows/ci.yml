@@ -3,30 +3,22 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: ['1.22', '1.23']
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
-
-      - name: Download dependencies
-        run: go mod download
+          go-version: '1.23'
 
       - name: Vet
         run: go vet ./...
@@ -34,40 +26,28 @@ jobs:
       - name: Build
         run: go build -o graft ./cmd/graft/
 
-      - name: Upload binary
-        if: matrix.go-version == '1.23' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v4
-        with:
-          name: graft-linux-amd64
-          path: graft
-          retention-days: 7
-
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.23'
 
-      - name: Build binaries
+      - name: Build release binaries
         run: |
           mkdir -p dist
-          GOOS=linux GOARCH=amd64 go build -o dist/graft-linux-amd64 ./cmd/graft/
-          GOOS=linux GOARCH=arm64 go build -o dist/graft-linux-arm64 ./cmd/graft/
-          GOOS=darwin GOARCH=amd64 go build -o dist/graft-darwin-amd64 ./cmd/graft/
-          GOOS=darwin GOARCH=arm64 go build -o dist/graft-darwin-arm64 ./cmd/graft/
+          GOOS=linux   GOARCH=amd64 go build -o dist/graft-linux-amd64       ./cmd/graft/
+          GOOS=linux   GOARCH=arm64 go build -o dist/graft-linux-arm64       ./cmd/graft/
+          GOOS=darwin  GOARCH=amd64 go build -o dist/graft-darwin-amd64      ./cmd/graft/
+          GOOS=darwin  GOARCH=arm64 go build -o dist/graft-darwin-arm64      ./cmd/graft/
           GOOS=windows GOARCH=amd64 go build -o dist/graft-windows-amd64.exe ./cmd/graft/
 
-      - name: Create release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
