@@ -1,0 +1,22 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output
+*.out
+fusion
+
+# Config (has secrets)
+config.yaml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
