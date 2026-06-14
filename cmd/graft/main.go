@@ -19,8 +19,8 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	log.Printf("Fusion Orchestrator starting on :%s", cfg.Server.Port)
-	for name, fp := range cfg.Fusion {
+	log.Printf("Graft starting on :%s", cfg.Server.Port)
+	for name, fp := range cfg.Profiles {
 		log.Printf("  profile %q: panel=%v judge=%s final=%s", name, fp.Panel, fp.Judge, fp.Final)
 	}
 
