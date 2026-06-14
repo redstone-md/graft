@@ -18,16 +18,16 @@ import (
 // ---------- OpenAI-compatible types ----------
 
 type ChatCompletionRequest struct {
-	Model       string        `json:"model"`
-	Messages    []llm.Message `json:"messages"`
-	Stream      bool          `json:"stream,omitempty"`
-	MaxTokens   int           `json:"max_tokens,omitempty"`
-	Temperature *float64      `json:"temperature,omitempty"`
-	TopP        *float64      `json:"top_p,omitempty"`
-	Stop        interface{}   `json:"stop,omitempty"`
+	Model       string          `json:"model"`
+	Messages    []llm.Message   `json:"messages"`
+	Stream      bool            `json:"stream,omitempty"`
+	MaxTokens   int             `json:"max_tokens,omitempty"`
+	Temperature *float64        `json:"temperature,omitempty"`
+	TopP        *float64        `json:"top_p,omitempty"`
+	Stop        interface{}     `json:"stop,omitempty"`
 	Tools       json.RawMessage `json:"tools,omitempty"`
-	ToolChoice  interface{}   `json:"tool_choice,omitempty"`
-	Plugins     []Plugin      `json:"plugins,omitempty"`
+	ToolChoice  interface{}     `json:"tool_choice,omitempty"`
+	Plugins     []Plugin        `json:"plugins,omitempty"`
 }
 
 type Plugin struct {
@@ -83,7 +83,6 @@ func NewHandler(cfg *config.Config, eng *engine.Engine) *Handler {
 }
 
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
-	// Auth middleware for all /v1 routes.
 	v1 := r.Group("/v1")
 	v1.Use(h.authMiddleware())
 	{
@@ -95,7 +94,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	r.GET("/", h.health)
 }
 
-// ---------- Auth middleware ----------
+// ---------- Auth ----------
 
 func (h *Handler) authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -107,7 +106,6 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// Support "Bearer <token>" and raw token.
 		token := strings.TrimPrefix(auth, "Bearer ")
 		token = strings.TrimSpace(token)
 
@@ -129,12 +127,11 @@ func (h *Handler) health(c *gin.Context) {
 }
 
 func (h *Handler) listModels(c *gin.Context) {
-	// List fusion profiles + individual models.
 	var models []map[string]string
 
-	for name := range h.cfg.Fusion {
+	for name := range h.cfg.Profiles {
 		models = append(models, map[string]string{
-			"id": name, "object": "model", "owned_by": "fusion",
+			"id": name, "object": "model", "owned_by": "graft",
 		})
 	}
 	for name := range h.cfg.Models {
@@ -143,10 +140,7 @@ func (h *Handler) listModels(c *gin.Context) {
 		})
 	}
 
-	c.JSON(http.StatusOK, ModelsResponse{
-		Object: "list",
-		Data:   toModelList(models),
-	})
+	c.JSON(http.StatusOK, ModelsResponse{Object: "list", Data: toModelList(models)})
 }
 
 func (h *Handler) chatCompletions(c *gin.Context) {
@@ -165,29 +159,27 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 		return
 	}
 
-	prompt := extractPrompt(req.Messages)
+	isGraft := isGraftModel(req.Model) || hasGraftPlugin(req.Plugins)
 
-	// Determine if this is a fusion request.
-	isFusion := isFusionModel(req.Model) || hasFusionPlugin(req.Plugins)
-
-	if isFusion {
+	if isGraft {
 		if req.Stream {
-			h.handleFusionStream(c, req, prompt)
+			h.handleGraftStream(c, req)
 		} else {
-			h.handleFusion(c, req, prompt)
+			h.handleGraft(c, req)
 		}
 	} else {
 		h.handleProxy(c, req)
 	}
 }
 
-// ---------- Fusion (non-streaming) ----------
+// ---------- Graft pipeline (non-streaming) ----------
 
-func (h *Handler) handleFusion(c *gin.Context, req ChatCompletionRequest, prompt string) {
-	panelModels, judgeModel, finalModel := h.extractFusionConfig(req.Plugins)
+func (h *Handler) handleGraft(c *gin.Context, req ChatCompletionRequest) {
+	profile, panelModels, judgeModel, finalModel := h.extractConfig(req.Model, req.Plugins)
 
-	result, err := h.engine.Run(c.Request.Context(), engine.FusionRequest{
-		Prompt:      prompt,
+	result, err := h.engine.Run(c.Request.Context(), engine.GraftRequest{
+		Messages:    req.Messages,
+		Profile:     profile,
 		PanelModels: panelModels,
 		JudgeModel:  judgeModel,
 		FinalModel:  finalModel,
@@ -200,16 +192,16 @@ func (h *Handler) handleFusion(c *gin.Context, req ChatCompletionRequest, prompt
 	}
 
 	resp := buildResponse(req.Model, result.FinalAnswer)
-	resp.Usage.PromptTokens = estimateTokens(prompt)
+	resp.Usage.PromptTokens = estimateTokens(req.Messages)
 	resp.Usage.CompletionTokens = estimateTokens(result.FinalAnswer)
 	resp.Usage.TotalTokens = resp.Usage.PromptTokens + resp.Usage.CompletionTokens
 
 	c.JSON(http.StatusOK, resp)
 }
 
-// ---------- Fusion (streaming) ----------
+// ---------- Graft pipeline (streaming) ----------
 
-func (h *Handler) handleFusionStream(c *gin.Context, req ChatCompletionRequest, prompt string) {
+func (h *Handler) handleGraftStream(c *gin.Context, req ChatCompletionRequest) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -223,10 +215,11 @@ func (h *Handler) handleFusionStream(c *gin.Context, req ChatCompletionRequest, 
 		return
 	}
 
-	panelModels, judgeModel, finalModel := h.extractFusionConfig(req.Plugins)
+	profile, panelModels, judgeModel, finalModel := h.extractConfig(req.Model, req.Plugins)
 
-	h.engine.RunStream(c.Request.Context(), engine.FusionRequest{
-		Prompt:      prompt,
+	h.engine.RunStream(c.Request.Context(), engine.GraftRequest{
+		Messages:    req.Messages,
+		Profile:     profile,
 		PanelModels: panelModels,
 		JudgeModel:  judgeModel,
 		FinalModel:  finalModel,
@@ -234,15 +227,13 @@ func (h *Handler) handleFusionStream(c *gin.Context, req ChatCompletionRequest, 
 	}, c.Writer, flusher)
 }
 
-// ---------- Proxy (non-fusion) ----------
+// ---------- Proxy (non-graft) ----------
 
 func (h *Handler) handleProxy(c *gin.Context, req ChatCompletionRequest) {
 	body, _ := json.Marshal(req)
 
-	// Resolve the model's provider.
 	baseURL, apiKey, modelID, err := h.resolveModelForProxy(req.Model)
 	if err != nil {
-		// Fallback: try first provider.
 		for _, p := range h.cfg.Providers {
 			baseURL, apiKey, modelID = p.BaseURL, p.APIKey, req.Model
 			break
@@ -252,8 +243,8 @@ func (h *Handler) handleProxy(c *gin.Context, req ChatCompletionRequest) {
 	req.Model = modelID
 	body, _ = json.Marshal(req)
 
-	url := baseURL + "/chat/completions"
-	httpReq, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, url, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost,
+		baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{"message": err.Error(), "type": "server_error"},
@@ -264,7 +255,7 @@ func (h *Handler) handleProxy(c *gin.Context, req ChatCompletionRequest) {
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	httpReq.Header.Set("HTTP-Referer", "https://github.com/redstone-md/graft")
-	httpReq.Header.Set("X-Title", "Fusion Orchestrator")
+	httpReq.Header.Set("X-Title", "Graft")
 
 	resp, err := h.llm.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -281,43 +272,18 @@ func (h *Handler) handleProxy(c *gin.Context, req ChatCompletionRequest) {
 
 // ---------- Helpers ----------
 
-func (h *Handler) resolveModelForProxy(model string) (baseURL, apiKey, modelID string, err error) {
-	// Check if model matches a model ref.
-	if m, ok := h.cfg.Models[model]; ok {
-		p, ok := h.cfg.Providers[m.Provider]
-		if !ok {
-			return "", "", "", fmt.Errorf("provider %q not found", m.Provider)
-		}
-		return p.BaseURL, p.APIKey, m.Model, nil
+func (h *Handler) extractConfig(model string, plugins []Plugin) (profile string, panelModels []string, judgeModel, finalModel string) {
+	// Check if model matches a profile name.
+	if _, ok := h.cfg.Profiles[model]; ok {
+		profile = model
 	}
 
-	// Check if model matches a fusion profile name — use the judge model.
-	if fp, ok := h.cfg.Fusion[model]; ok {
-		return h.cfg.ResolveModel(fp.Judge)
-	}
-
-	return "", "", "", fmt.Errorf("model %q not found", model)
-}
-
-func isFusionModel(model string) bool {
-	// Check if the model matches any fusion profile name.
-	return strings.EqualFold(model, "fusion")
-}
-
-func hasFusionPlugin(plugins []Plugin) bool {
+	// Check plugins for overrides.
 	for _, p := range plugins {
-		if strings.EqualFold(p.ID, "fusion") || strings.EqualFold(p.ID, "openrouter:fusion") {
-			if p.Enabled == nil || *p.Enabled {
-				return true
+		if strings.EqualFold(p.ID, "graft") || strings.EqualFold(p.ID, "openrouter:fusion") {
+			if p.Enabled != nil && !*p.Enabled {
+				continue
 			}
-		}
-	}
-	return false
-}
-
-func (h *Handler) extractFusionConfig(plugins []Plugin) (panelModels []string, judgeModel, finalModel string) {
-	for _, p := range plugins {
-		if strings.EqualFold(p.ID, "fusion") || strings.EqualFold(p.ID, "openrouter:fusion") {
 			if len(p.AnalysisModels) > 0 {
 				panelModels = p.AnalysisModels
 			}
@@ -327,25 +293,49 @@ func (h *Handler) extractFusionConfig(plugins []Plugin) (panelModels []string, j
 			}
 		}
 	}
+
 	return
 }
 
-func extractPrompt(messages []llm.Message) string {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" {
-			return messages[i].Content
+func (h *Handler) resolveModelForProxy(model string) (baseURL, apiKey, modelID string, err error) {
+	if m, ok := h.cfg.Models[model]; ok {
+		p, ok := h.cfg.Providers[m.Provider]
+		if !ok {
+			return "", "", "", fmt.Errorf("provider %q not found", m.Provider)
+		}
+		return p.BaseURL, p.APIKey, m.Model, nil
+	}
+
+	if fp, ok := h.cfg.Profiles[model]; ok {
+		return h.cfg.ResolveModel(fp.Judge)
+	}
+
+	return "", "", "", fmt.Errorf("model %q not found", model)
+}
+
+func isGraftModel(model string) bool {
+	_, ok := graftModels[model]
+	return ok
+}
+
+var graftModels = map[string]bool{
+	"graft": true,
+}
+
+func hasGraftPlugin(plugins []Plugin) bool {
+	for _, p := range plugins {
+		if strings.EqualFold(p.ID, "graft") || strings.EqualFold(p.ID, "openrouter:fusion") {
+			if p.Enabled == nil || *p.Enabled {
+				return true
+			}
 		}
 	}
-	var parts []string
-	for _, m := range messages {
-		parts = append(parts, fmt.Sprintf("[%s] %s", m.Role, m.Content))
-	}
-	return strings.Join(parts, "\n")
+	return false
 }
 
 func buildResponse(model, content string) ChatCompletionResponse {
 	return ChatCompletionResponse{
-		ID:      fmt.Sprintf("chatcmpl-fusion-%d", time.Now().UnixNano()),
+		ID:      fmt.Sprintf("chatcmpl-graft-%d", time.Now().UnixNano()),
 		Object:  "chat.completion",
 		Created: time.Now().Unix(),
 		Model:   model,
@@ -369,11 +359,22 @@ func buildResponse(model, content string) ChatCompletionResponse {
 	}
 }
 
-func estimateTokens(text string) int {
-	if len(text) == 0 {
+func estimateTokens(v interface{}) int {
+	switch val := v.(type) {
+	case string:
+		if len(val) == 0 {
+			return 0
+		}
+		return len(val) / 4
+	case []llm.Message:
+		total := 0
+		for _, m := range val {
+			total += len(m.Content) / 4
+		}
+		return total
+	default:
 		return 0
 	}
-	return len(text) / 4
 }
 
 func toModelList(maps []map[string]string) []struct {
