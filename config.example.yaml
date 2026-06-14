@@ -1,0 +1,73 @@
+# Fusion Orchestrator configuration
+# Copy to config.yaml and fill in your values.
+
+server:
+  port: "8080"
+  auth_token: "your-secret-token-here"  # REQUIRED — used to authenticate /v1 requests
+
+# Upstream API providers.
+providers:
+  openrouter:
+    base_url: "https://openrouter.ai/api/v1"
+    api_key: "sk-or-v1-xxxxxxxxxxxx"
+  # openai:
+  #   base_url: "https://api.openai.com/v1"
+  #   api_key: "sk-xxxxxxxxxxxx"
+  # deepseek:
+  #   base_url: "https://api.deepseek.com/v1"
+  #   api_key: "sk-xxxxxxxxxxxx"
+
+# Concrete models — each refs a provider and a model ID.
+models:
+  deepseek-v4:
+    provider: openrouter
+    model: "deepseek/deepseek-v4-pro"
+  gemini-flash:
+    provider: openrouter
+    model: "google/gemini-2.5-flash"
+  kimi:
+    provider: openrouter
+    model: "moonshotai/kimi-k2.6"
+  claude-opus:
+    provider: openrouter
+    model: "anthropic/claude-opus-4"
+  claude-haiku:
+    provider: openrouter
+    model: "anthropic/claude-haiku-4.5"
+
+# Fusion profiles — each defines a pipeline: panel → judge → final.
+# Use the profile name as the "model" field in /v1/chat/completions.
+fusion:
+  # Default: balanced cost/quality.
+  default:
+    panel:
+      - deepseek-v4
+      - gemini-flash
+      - kimi
+    judge: claude-opus
+    final: claude-opus
+
+  # Cheap: budget models only.
+  cheap:
+    panel:
+      - gemini-flash
+      - kimi
+    judge: deepseek-v4
+    final: deepseek-v4
+
+  # Premium: maximum quality.
+  premium:
+    panel:
+      - claude-opus
+      - deepseek-v4
+      - gemini-flash
+    judge: claude-opus
+    final: claude-opus
+
+  # Fast: minimal panel, fast models.
+  fast:
+    panel:
+      - gemini-flash
+      - claude-haiku
+    judge: deepseek-v4
+    final: deepseek-v4
