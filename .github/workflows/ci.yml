@@ -46,11 +46,16 @@ jobs:
       - name: Build release binaries
         run: |
           mkdir -p dist
-          GOOS=linux   GOARCH=amd64 go build -o dist/graft-linux-amd64       ./cmd/graft/
-          GOOS=linux   GOARCH=arm64 go build -o dist/graft-linux-arm64       ./cmd/graft/
-          GOOS=darwin  GOARCH=amd64 go build -o dist/graft-darwin-amd64      ./cmd/graft/
-          GOOS=darwin  GOARCH=arm64 go build -o dist/graft-darwin-arm64      ./cmd/graft/
-          GOOS=windows GOARCH=amd64 go build -o dist/graft-windows-amd64.exe ./cmd/graft/
+          VERSION=${GITHUB_REF#refs/tags/}
+          COMMIT=$(git rev-parse --short HEAD)
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          LDFLAGS="-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}"
+
+          GOOS=linux   GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/graft-linux-amd64       ./cmd/graft/
+          GOOS=linux   GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o dist/graft-linux-arm64       ./cmd/graft/
+          GOOS=darwin  GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/graft-darwin-amd64      ./cmd/graft/
+          GOOS=darwin  GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o dist/graft-darwin-arm64      ./cmd/graft/
+          GOOS=windows GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/graft-windows-amd64.exe ./cmd/graft/
 
       - name: Generate release notes
         run: |
