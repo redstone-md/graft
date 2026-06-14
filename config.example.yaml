@@ -1,4 +1,4 @@
-# Fusion Orchestrator configuration
+# Graft — multi-model pipeline configuration
 # Copy to config.yaml and fill in your values.
 
 server:
@@ -35,9 +35,9 @@ models:
     provider: openrouter
     model: "anthropic/claude-haiku-4.5"
 
-# Fusion profiles — each defines a pipeline: panel → judge → final.
+# Pipeline profiles — each defines: panel → judge → final.
 # Use the profile name as the "model" field in /v1/chat/completions.
-fusion:
+profiles:
   # Default: balanced cost/quality.
   default:
     panel:

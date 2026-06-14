@@ -11,10 +11,10 @@ import (
 // ---------- Types ----------
 
 type Config struct {
-	Server    ServerConfig              `yaml:"server"`
-	Providers map[string]Provider       `yaml:"providers"`
-	Models    map[string]ModelRef       `yaml:"models"`
-	Fusion    map[string]FusionProfile  `yaml:"fusion"`
+	Server    ServerConfig                `yaml:"server"`
+	Providers map[string]Provider         `yaml:"providers"`
+	Models    map[string]ModelRef         `yaml:"models"`
+	Profiles  map[string]PipelineProfile  `yaml:"profiles"`
 }
 
 type ServerConfig struct {
@@ -32,7 +32,7 @@ type ModelRef struct {
 	Model    string `yaml:"model"`
 }
 
-type FusionProfile struct {
+type PipelineProfile struct {
 	Panel []string `yaml:"panel"`
 	Judge string   `yaml:"judge"`
 	Final string   `yaml:"final"`
@@ -60,7 +60,6 @@ func Load(path string) (*Config, error) {
 
 // ---------- Validation ----------
 
-// Validate checks the config against the spec and returns all errors.
 func (c *Config) Validate() error {
 	var errs []string
 
@@ -103,12 +102,12 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// --- fusion profiles ---
-	if len(c.Fusion) == 0 {
-		errs = append(errs, "fusion: at least one profile is required")
+	// --- profiles ---
+	if len(c.Profiles) == 0 {
+		errs = append(errs, "profiles: at least one pipeline profile is required")
 	}
-	for name, fp := range c.Fusion {
-		prefix := fmt.Sprintf("fusion.%s", name)
+	for name, fp := range c.Profiles {
+		prefix := fmt.Sprintf("profiles.%s", name)
 
 		if len(fp.Panel) == 0 {
 			errs = append(errs, prefix+".panel: at least one model ref is required")
@@ -139,7 +138,6 @@ func (c *Config) Validate() error {
 
 // ---------- Helpers ----------
 
-// ResolveModel returns (baseURL, apiKey, modelID) for a model ref name.
 func (c *Config) ResolveModel(ref string) (baseURL, apiKey, modelID string, err error) {
 	m, ok := c.Models[ref]
 	if !ok {
